@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-background text-text font-sans antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-serif tracking-tight text-primary;
+  }
+}
+
+@layer components {
+  /* The "Sunset Aura" gradient border. 
+    Tailwind doesn't natively support gradient borders well without hacks, 
+    so we define a reusable component class here using CSS border-image.
+  */
+  .aura-border {
+    border: 1px solid transparent;
+    background-image: linear-gradient(var(--color-surface), var(--color-surface)), 
+                      var(--gradient-sunset);
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+
+  /* The Agent Thinking Blur State.
+    Applies the sunset gradient with the required 24px blur.
+  */
+  .aura-glow {
+    @apply bg-gradient-sunset blur-[24px] opacity-80;
+  }
+
+  /* Primary Button Blueprint
+  */
+  .btn-primary {
+    @apply bg-primary text-white font-sans text-[13px] px-4 py-2 rounded 
+           transition-all duration-200 ease-smooth hover:bg-gradient-sunset hover:text-white;
+  }
+}

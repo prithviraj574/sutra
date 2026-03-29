@@ -1,0 +1,11 @@
+.env
+backend/firebase-service-account.json
+backend/gcs-service-account.json
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+backend/.venv/
+backend/.coverage
+frontend/node_modules
