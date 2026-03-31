@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
 from sutra_backend.api.routes import api_router
@@ -37,6 +38,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    
+    # Add CORS middleware to allow all HTTP methods and origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Allow all origins
+        allow_credentials=True,
+        allow_methods=["*"],  # Allow all HTTP methods (GET, POST, PUT, DELETE, OPTIONS, etc.)
+        allow_headers=["*"],  # Allow all headers
+    )
+    
     app.state.settings = resolved_settings
     app.include_router(api_router, prefix="/api")
 

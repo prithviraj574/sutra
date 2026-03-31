@@ -81,5 +81,9 @@ Recommended local startup order:
 
 The workspace also contains local config files for this topology:
 
-- backend env: `.context/local/backend.env`
+- backend env: `backend/.env`
 - frontend env: `frontend/.env.local`
+
+The helper scripts now read backend runtime settings directly from `backend/.env`.
+That keeps the local control-plane path aligned with the backend's normal local
+configuration instead of introducing a second hidden env source.
