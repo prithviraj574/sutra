@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from tempfile import NamedTemporaryFile
 from uuid import UUID
 
@@ -155,3 +156,60 @@ def test_conversation_message_route_blocks_cross_tenant_access(monkeypatch) -> N
     )
 
     assert response.status_code == 404
+
+
+def test_conversation_stream_emits_runtime_message_and_workspace_events(monkeypatch) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite://",
+        runtime_provider="static_dev",
+        dev_runtime_base_url="http://runtime.internal",
+        dev_runtime_api_key="runtime-key",
+    )
+    client, session = build_client(settings)
+    authenticate_default_user(client, monkeypatch)
+    agent = session.exec(select(Agent)).one()
+
+    async def fake_create_response(self, request, *, request_env=None):
+        return HermesResponse(
+            response_id="resp_stream",
+            output_text="Streamed assistant reply",
+            raw_response={"id": "resp_stream", "output": []},
+        )
+
+    monkeypatch.setattr(runtime_service.HermesRuntimeClient, "create_response", fake_create_response)
+
+    create_response = client.post(
+        f"/api/agents/{agent.id}/responses",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"input": "Stream this"},
+    )
+    assert create_response.status_code == 200
+    conversation_id = create_response.json()["conversation_id"]
+
+    with client.stream(
+        "GET",
+        f"/api/conversations/{conversation_id}/stream?max_events=5&idle_timeout_seconds=1",
+        headers={"Authorization": "Bearer valid-token"},
+    ) as response:
+        assert response.status_code == 200
+        payload_lines = [
+            line.removeprefix("data: ")
+            for line in response.iter_lines()
+            if line.startswith("data: ")
+        ]
+
+    assert len(payload_lines) == 5
+    event_types = [json.loads(line)["type"] for line in payload_lines]
+    assert event_types == [
+        "runtime.state_changed",
+        "run.started",
+        "assistant.message_delta",
+        "run.completed",
+        "workspace.item_created",
+    ]
+    runtime_payload = json.loads(payload_lines[0])["payload"]
+    assert runtime_payload["provider"] == "static_dev"
+    assert runtime_payload["isolation_ok"] is True
+    workspace_payload = json.loads(payload_lines[-1])["payload"]
+    assert workspace_payload["path"].startswith("conversations/")

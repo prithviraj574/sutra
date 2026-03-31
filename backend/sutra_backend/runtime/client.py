@@ -100,8 +100,10 @@ def probe_runtime_health(
         timeout=timeout_seconds,
         transport=transport,
     ) as client:
-        for path in ("/health", "/healthz", "/"):
-            attempted_urls.append(f"{target.base_url.rstrip('/')}{path}")
+        for path in ("health", "healthz", ""):
+            attempted_urls.append(
+                f"{target.base_url.rstrip('/')}/{path}".rstrip("/")
+            )
             try:
                 response = client.get(path, headers=headers)
             except httpx.HTTPError as exc:
@@ -168,7 +170,7 @@ class HermesRuntimeClient:
             transport=self._transport,
         ) as client:
             response = await client.post(
-                "/v1/responses",
+                "v1/responses",
                 headers=self._headers(request_env),
                 json=request.to_payload(),
             )
@@ -194,7 +196,7 @@ class HermesRuntimeClient:
             transport=self._transport,
         ) as client:
             response = await client.post(
-                "/v1/chat/completions",
+                "v1/chat/completions",
                 headers=self._headers(request_env),
                 json={"model": model, "messages": messages},
             )

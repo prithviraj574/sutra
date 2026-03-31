@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { Agent, Artifact, SharedWorkspaceItem, Team } from "../../lib/api";
+import type { Agent, Artifact, AutomationJob, SharedWorkspaceItem, Team } from "../../lib/api";
 import { useApiClient, useBackendSession } from "../auth/useSession";
 
 function TeamWorkspaceInner({ teamId }: { teamId: string }) {
@@ -22,6 +22,11 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
   const [messageAgentId, setMessageAgentId] = useState("");
   const [messageNote, setMessageNote] = useState("");
   const [completionNote, setCompletionNote] = useState("");
+  const [selectedSecretIds, setSelectedSecretIds] = useState<string[]>([]);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [jobName, setJobName] = useState("");
+  const [jobSchedule, setJobSchedule] = useState("0 9 * * 1");
+  const [jobPrompt, setJobPrompt] = useState("");
 
   const teams = useQuery({
     queryKey: ["teams", session.data?.user.id],
@@ -40,6 +45,11 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
   const teamArtifacts = useQuery({
     queryKey: ["team-artifacts", teamId],
     queryFn: () => api.listTeamArtifacts(teamId),
+    enabled: !!team,
+  });
+  const automationJobs = useQuery({
+    queryKey: ["automation-jobs", teamId],
+    queryFn: () => api.listAutomationJobs({ teamId }),
     enabled: !!team,
   });
   const teamConversations = useQuery({
@@ -82,11 +92,34 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
     retry: false,
     refetchInterval: 15000,
   });
+  const provisionRuntime = useMutation({
+    mutationFn: () => api.provisionAgentRuntime(pickupAgentId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
+    },
+  });
   const githubRepositories = useQuery({
     queryKey: ["github-repositories", session.data?.user.id],
     queryFn: () => api.listGitHubRepositories(),
     enabled: !!githubConnection.data?.connection,
     retry: false,
+  });
+  const secrets = useQuery({
+    queryKey: ["secrets", session.data?.user.id],
+    queryFn: () => api.listSecrets(),
+    enabled: !!session.data,
+  });
+  const verifyRuntime = useMutation({
+    mutationFn: () => api.verifyAgentRuntime(pickupAgentId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
+    },
+  });
+  const restartRuntime = useMutation({
+    mutationFn: () => api.restartAgentRuntime(pickupAgentId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
+    },
   });
 
   useEffect(() => {
@@ -109,6 +142,62 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
     }
     setSelectedRepository(githubRepositories.data.items[0].full_name);
   }, [githubRepositories.data?.items, selectedRepository]);
+
+  useEffect(() => {
+    const activeConversationId = teamConversations.data?.items[0]?.id;
+    if (!activeConversationId) {
+      return;
+    }
+
+    let cancelled = false;
+    let closeStream = () => {};
+    setStreamError(null);
+
+    void api
+      .streamConversationEvents(activeConversationId, {
+        onEvent: (event) => {
+          if (cancelled) {
+            return;
+          }
+          if (event.type === "workspace.item_created") {
+            const itemId = String(event.payload.item_id ?? "");
+            if (itemId) {
+              setLatestGeneratedItemIds((current) =>
+                current.includes(itemId) ? current : [itemId, ...current].slice(0, 4),
+              );
+              setSelectedItemId(itemId);
+            }
+            void queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] });
+            return;
+          }
+          if (event.type === "task.updated") {
+            void queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] });
+            void queryClient.invalidateQueries({ queryKey: ["task-updates"] });
+            return;
+          }
+          if (event.type === "runtime.state_changed") {
+            void queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
+          }
+        },
+        onError: (error) => {
+          if (!cancelled) {
+            setStreamError(error.message);
+          }
+        },
+      })
+      .then((subscription) => {
+        if (cancelled) {
+          subscription.close();
+          return;
+        }
+        closeStream = subscription.close;
+      });
+
+    return () => {
+      cancelled = true;
+      closeStream();
+    };
+  }, [api, pickupAgentId, queryClient, teamConversations.data?.items, teamId]);
 
   const selectedItem = useMemo<SharedWorkspaceItem | null>(
     () => workspace.data?.items.find((item) => item.id === selectedItemId) ?? null,
@@ -177,6 +266,7 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
     mutationFn: () =>
       api.createTeamHuddle(teamId, {
         input: draft.trim(),
+        secret_ids: selectedSecretIds,
       }),
     onSuccess: async (payload) => {
       setDraft("");
@@ -195,6 +285,7 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
       api.createTeamResponse(teamId, {
         input: draft.trim(),
         conversation_id: teamConversations.data?.items[0]?.id,
+        secret_ids: selectedSecretIds,
       }),
     onSuccess: async (payload) => {
       setDraft("");
@@ -320,6 +411,46 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
       ]);
     },
   });
+  const createAutomationJob = useMutation({
+    mutationFn: () =>
+      api.createAutomationJob({
+        team_id: teamId,
+        name: jobName.trim(),
+        schedule: jobSchedule.trim(),
+        prompt: jobPrompt.trim(),
+      }),
+    onSuccess: async () => {
+      setJobName("");
+      setJobPrompt("");
+      await queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
+    },
+  });
+  const updateAutomationJob = useMutation({
+    mutationFn: ({ jobId, enabled }: { jobId: string; enabled: boolean }) =>
+      api.updateAutomationJob(jobId, { enabled }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
+    },
+  });
+  const runAutomationJob = useMutation({
+    mutationFn: (jobId: string) => api.runAutomationJob(jobId),
+    onSuccess: async (payload) => {
+      if (payload.workspace_item_id) {
+        setLatestGeneratedItemIds((current) =>
+          current.includes(payload.workspace_item_id!)
+            ? current
+            : [payload.workspace_item_id!, ...current].slice(0, 4),
+        );
+        setSelectedItemId(payload.workspace_item_id);
+      }
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] }),
+        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
+        queryClient.invalidateQueries({ queryKey: ["team-conversations", teamId] }),
+        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
+      ]);
+    },
+  });
 
   function handleRunTeam(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -376,6 +507,27 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
     void completeSelectedTask.mutateAsync();
   }
 
+  function toggleSecret(secretId: string) {
+    setSelectedSecretIds((current) =>
+      current.includes(secretId)
+        ? current.filter((id) => id !== secretId)
+        : [...current, secretId],
+    );
+  }
+
+  function handleCreateAutomationJob(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!jobName.trim() || !jobSchedule.trim() || !jobPrompt.trim()) {
+      return;
+    }
+    void createAutomationJob.mutateAsync();
+  }
+
+  const teamAutomationJobs = useMemo<AutomationJob[]>(
+    () => automationJobs.data?.items ?? [],
+    [automationJobs.data?.items],
+  );
+
   return (
     <main className="mx-auto min-h-screen max-w-6xl px-6 pb-24 pt-20">
       <header className="flex items-end justify-between gap-6">
@@ -401,8 +553,34 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
             />
+            <div className="mt-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-muted">Secrets For This Run</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(secrets.data?.items ?? []).map((secret) => {
+                  const selected = selectedSecretIds.includes(secret.id);
+                  return (
+                    <button
+                      className={`rounded border px-2 py-1 text-xs transition-colors ${
+                        selected
+                          ? "border-primary bg-background text-primary"
+                          : "border-border bg-background text-muted hover:border-primary"
+                      }`}
+                      key={secret.id}
+                      onClick={() => toggleSecret(secret.id)}
+                      type="button"
+                    >
+                      {secret.name}
+                    </button>
+                  );
+                })}
+                {(secrets.data?.items ?? []).length === 0 ? (
+                  <span className="text-xs text-muted">No stored secrets selected.</span>
+                ) : null}
+              </div>
+            </div>
             {runHuddle.error ? <p className="mt-4 text-sm text-primary">{runHuddle.error.message}</p> : null}
             {runTeam.error ? <p className="mt-4 text-sm text-primary">{runTeam.error.message}</p> : null}
+            {streamError ? <p className="mt-4 text-sm text-primary">{streamError}</p> : null}
             <div className="mt-5 flex flex-wrap gap-3">
               <button
                 className="btn-secondary"
@@ -493,6 +671,103 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
             ) : null}
           </section>
 
+          <section className="rounded-lg border border-border bg-background p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Automations</p>
+                <p className="mt-3 text-sm leading-7 text-muted">
+                  Save repeatable team prompts, keep them disabled until you trust them, and run them on demand while the background scheduler matures.
+                </p>
+              </div>
+              <span className="rounded-full border border-border px-3 py-1 text-xs uppercase tracking-[0.16em] text-muted">
+                {teamAutomationJobs.length} job{teamAutomationJobs.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <form className="mt-5 space-y-4" onSubmit={handleCreateAutomationJob}>
+              <input
+                className="w-full rounded border border-border bg-surface px-3 py-3 text-sm text-text outline-none"
+                placeholder="Weekly Team Review"
+                value={jobName}
+                onChange={(event) => setJobName(event.target.value)}
+              />
+              <input
+                className="w-full rounded border border-border bg-surface px-3 py-3 text-sm text-text outline-none"
+                placeholder="0 9 * * 1"
+                value={jobSchedule}
+                onChange={(event) => setJobSchedule(event.target.value)}
+              />
+              <textarea
+                className="min-h-24 w-full rounded border border-border bg-surface px-3 py-3 text-sm leading-7 text-text outline-none"
+                placeholder="Review the shared workspace, summarize priorities, and flag blocked tasks."
+                value={jobPrompt}
+                onChange={(event) => setJobPrompt(event.target.value)}
+              />
+              {createAutomationJob.error ? (
+                <p className="text-sm text-primary">{createAutomationJob.error.message}</p>
+              ) : null}
+              <button className="btn-secondary" disabled={createAutomationJob.isPending} type="submit">
+                {createAutomationJob.isPending ? "Saving..." : "Create Automation"}
+              </button>
+            </form>
+            <div className="mt-5 space-y-3">
+              {teamAutomationJobs.map((job) => (
+                <div className="rounded border border-border bg-surface px-4 py-4" key={job.id}>
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm text-primary">{job.name}</p>
+                      <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted">
+                        {job.schedule} · {job.enabled ? "enabled" : "disabled"}
+                      </p>
+                      <p className="mt-3 text-sm leading-7 text-text">{job.prompt}</p>
+                      <p className="mt-2 text-xs text-muted">
+                        Last run {job.last_run_at ? new Date(job.last_run_at).toLocaleString() : "not yet run"}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="btn-secondary"
+                        disabled={updateAutomationJob.isPending}
+                        onClick={() =>
+                          void updateAutomationJob.mutateAsync({
+                            jobId: job.id,
+                            enabled: !job.enabled,
+                          })
+                        }
+                        type="button"
+                      >
+                        {job.enabled ? "Disable" : "Enable"}
+                      </button>
+                      <button
+                        className="btn-primary"
+                        disabled={!job.enabled || runAutomationJob.isPending}
+                        onClick={() => void runAutomationJob.mutateAsync(job.id)}
+                        type="button"
+                      >
+                        {runAutomationJob.isPending ? "Running..." : "Run Now"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {teamAutomationJobs.length === 0 ? (
+                <div className="rounded border border-border bg-surface px-4 py-4 text-sm text-muted">
+                  No team automations yet. Save one once your repeated team workflow is stable enough to replay.
+                </div>
+              ) : null}
+              {updateAutomationJob.error ? (
+                <p className="text-sm text-primary">{updateAutomationJob.error.message}</p>
+              ) : null}
+              {runAutomationJob.error ? (
+                <p className="text-sm text-primary">{runAutomationJob.error.message}</p>
+              ) : null}
+              {runAutomationJob.data?.output_text ? (
+                <div className="rounded border border-border bg-surface px-4 py-3 text-sm text-text">
+                  {runAutomationJob.data.output_text}
+                </div>
+              ) : null}
+            </div>
+          </section>
+
           <section className="rounded-lg border border-border bg-background">
             <div className="border-b border-border px-5 py-4">
               <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Shared Workspace</p>
@@ -537,14 +812,26 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
                   {runtimeStatus.data?.lease ? (
                     <>
                       <p className="mt-2 text-sm text-text">
-                        {runtimeStatus.data.lease.ready
-                          ? "Runtime is ready to accept inbox work."
-                          : runtimeStatus.data.lease.readiness_reason}
+                        {runtimeStatus.data.lease.readiness_stage} · {runtimeStatus.data.lease.readiness_reason}
                       </p>
                       <p className="mt-2 text-xs text-muted">
-                        State: {runtimeStatus.data.lease.state} · Heartbeat{" "}
+                        State: {runtimeStatus.data.lease.state} · Provider {runtimeStatus.data.lease.provider} · Heartbeat{" "}
                         {runtimeStatus.data.lease.heartbeat_fresh ? "fresh" : "stale"}
                       </p>
+                      <p className="mt-2 text-xs text-muted">
+                        Isolation {runtimeStatus.data.lease.isolation_ok ? "verified" : "pending"} · {runtimeStatus.data.lease.isolation_reason}
+                      </p>
+                      {runtimeStatus.data.lease.host_vm_id ? (
+                        <p className="mt-2 text-xs text-muted">
+                          Host {runtimeStatus.data.lease.host_vm_id}
+                        </p>
+                      ) : null}
+                      {verifyRuntime.error ? (
+                        <p className="mt-2 text-xs text-primary">{verifyRuntime.error.message}</p>
+                      ) : null}
+                      {restartRuntime.error ? (
+                        <p className="mt-2 text-xs text-primary">{restartRuntime.error.message}</p>
+                      ) : null}
                     </>
                   ) : runtimeStatus.error ? (
                     <p className="mt-2 text-sm text-primary">{runtimeStatus.error.message}</p>
@@ -569,6 +856,30 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
                   {pickupNextTask.isPending ? "Picking Up..." : "Pick Up Next Task"}
                 </button>
                 <button
+                  className="btn-secondary"
+                  disabled={!pickupAgentId || provisionRuntime.isPending}
+                  onClick={() => void provisionRuntime.mutateAsync()}
+                  type="button"
+                >
+                  {provisionRuntime.isPending ? "Provisioning..." : "Provision Runtime"}
+                </button>
+                <button
+                  className="btn-secondary"
+                  disabled={!pickupAgentId || verifyRuntime.isPending}
+                  onClick={() => void verifyRuntime.mutateAsync()}
+                  type="button"
+                >
+                  {verifyRuntime.isPending ? "Verifying..." : "Verify Runtime"}
+                </button>
+                <button
+                  className="btn-secondary"
+                  disabled={!pickupAgentId || restartRuntime.isPending}
+                  onClick={() => void restartRuntime.mutateAsync()}
+                  type="button"
+                >
+                  {restartRuntime.isPending ? "Restarting..." : "Restart Runtime"}
+                </button>
+                <button
                   className="btn-primary"
                   disabled={!pickupAgentId || runNextInboxTask.isPending}
                   onClick={() => void runNextInboxTask.mutateAsync()}
@@ -586,6 +897,7 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
                 </button>
               </div>
               {pickupNextTask.error ? <p className="mt-3 text-sm text-primary">{pickupNextTask.error.message}</p> : null}
+              {provisionRuntime.error ? <p className="mt-3 text-sm text-primary">{provisionRuntime.error.message}</p> : null}
               {runNextInboxTask.error ? <p className="mt-3 text-sm text-primary">{runNextInboxTask.error.message}</p> : null}
               {runInboxCycle.error ? <p className="mt-3 text-sm text-primary">{runInboxCycle.error.message}</p> : null}
               {runNextInboxTask.data?.output_text ? (

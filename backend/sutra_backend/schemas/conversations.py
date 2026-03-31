@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ConversationRead(BaseModel):
@@ -42,3 +43,13 @@ class MessageListResponse(BaseModel):
 
 class TeamConversationListResponse(BaseModel):
     items: list[ConversationRead]
+
+
+class ConversationStreamEvent(BaseModel):
+    event_id: str
+    type: str
+    conversation_id: UUID
+    agent_id: UUID | None = None
+    timestamp: datetime
+    sequence: int
+    payload: dict[str, Any] = Field(default_factory=dict)
