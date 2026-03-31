@@ -1,6 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "../auth/AuthProvider";
 import { useApiClient, useBackendSession } from "../auth/useSession";
@@ -27,6 +27,7 @@ export function HubPage() {
   const auth = useAuth();
   const api = useApiClient();
   const session = useBackendSession();
+  const queryClient = useQueryClient();
   const frontendEnv = useMemo(() => readFrontendEnv(), []);
   const [searchParams, setSearchParams] = useSearchParams();
   const teams = useQuery({
@@ -69,6 +70,24 @@ export function HubPage() {
     queryFn: () => api.readAgentRuntime(defaultAgent!.id),
     enabled: !!defaultAgent,
     retry: false,
+  });
+  const provisionRuntime = useMutation({
+    mutationFn: () => api.provisionAgentRuntime(defaultAgent!.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", defaultAgent?.id] });
+    },
+  });
+  const verifyRuntime = useMutation({
+    mutationFn: () => api.verifyAgentRuntime(defaultAgent!.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", defaultAgent?.id] });
+    },
+  });
+  const restartRuntime = useMutation({
+    mutationFn: () => api.restartAgentRuntime(defaultAgent!.id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", defaultAgent?.id] });
+    },
   });
   const conversations = useQuery({
     queryKey: ["agent-conversations", defaultAgent?.id],
@@ -205,6 +224,60 @@ export function HubPage() {
         />
       </form>
 
+      {defaultAgent ? (
+        <section className="mt-8 rounded-lg border border-border bg-surface px-5 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Default Runtime</p>
+              <p className="mt-2 text-sm text-primary">
+                {runtime.data?.lease.readiness_stage ?? "provisioning"} · {runtime.data?.lease.readiness_reason ?? "Runtime status unavailable."}
+              </p>
+              <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted">
+                Provider {runtime.data?.lease.provider ?? defaultAgent.runtime_kind} · Isolation {runtime.data?.lease.isolation_ok ? "verified" : "pending"}
+              </p>
+              {runtime.data?.lease.host_vm_id ? (
+                <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted">
+                  Host {runtime.data.lease.host_vm_id}
+                </p>
+              ) : null}
+              {provisionRuntime.error ? (
+                <p className="mt-2 text-xs text-primary">{provisionRuntime.error.message}</p>
+              ) : null}
+              {verifyRuntime.error ? (
+                <p className="mt-2 text-xs text-primary">{verifyRuntime.error.message}</p>
+              ) : null}
+              {restartRuntime.error ? (
+                <p className="mt-2 text-xs text-primary">{restartRuntime.error.message}</p>
+              ) : null}
+            </div>
+            <button
+              className="btn-secondary"
+              disabled={provisionRuntime.isPending || !defaultAgent}
+              onClick={() => void provisionRuntime.mutateAsync()}
+              type="button"
+            >
+              {provisionRuntime.isPending ? "Provisioning..." : "Provision Runtime"}
+            </button>
+            <button
+              className="btn-secondary"
+              disabled={verifyRuntime.isPending || !defaultAgent}
+              onClick={() => void verifyRuntime.mutateAsync()}
+              type="button"
+            >
+              {verifyRuntime.isPending ? "Verifying..." : "Verify Runtime"}
+            </button>
+            <button
+              className="btn-secondary"
+              disabled={restartRuntime.isPending || !defaultAgent}
+              onClick={() => void restartRuntime.mutateAsync()}
+              type="button"
+            >
+              {restartRuntime.isPending ? "Restarting..." : "Restart Runtime"}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
       <section className="mt-16">
         <div className="mb-4 flex items-center justify-between">
           <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted">Workspace</p>
@@ -250,7 +323,7 @@ export function HubPage() {
                 </p>
                 {defaultAgent && team.id === defaultAgent.team_id ? (
                   <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted">
-                    Runtime {runtime.data?.lease.state ?? "not provisioned"}
+                    Runtime {runtime.data?.lease.readiness_stage ?? runtime.data?.lease.state ?? "not provisioned"}
                   </p>
                 ) : null}
                 {team.mode === "team" ? (

@@ -236,6 +236,8 @@ class RuntimeLease(TimestampedUUIDModel, table=True):
 
     agent_id: UUID = Field(foreign_key="agents.id", index=True, nullable=False)
     vm_id: str = Field(nullable=False)
+    host_vm_id: str | None = Field(default=None, index=True)
+    host_api_base_url: str | None = Field(default=None)
     state: str = Field(default="provisioning", index=True, nullable=False)
     api_base_url: str | None = Field(default=None)
     last_heartbeat_at: datetime | None = Field(default=None)

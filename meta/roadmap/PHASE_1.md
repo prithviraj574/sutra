@@ -19,16 +19,18 @@ Hermes was built as a single-user local process. We are making it multi-tenant o
 
 **Stack:**
 - **Neon DB (Postgres)** — primary database for user data, agent metadata, and secrets
-- **GCP Compute Engine** — runs Firecracker microVMs for agents
-- **GCP Cloud Run** — hosts the combined backend and frontend container
+- **GCP Compute Engine** — runs a dedicated Sutra runtime host VM that manages Firecracker microVMs for agents
+- **GCP Cloud Run** — hosts the `sutra_backend` service
+- **GCP Cloud Run** — hosts the `frontend` service
 - **Google Cloud Volumes** — persists agent memory and state across sessions
 - **Firebase** — authentication (Google OAuth) and real-time updates
 
 **Multi-tenancy approach:**
-- One Firecracker microVM per agent (not per user). Each agent runs in its own isolated VM.
-- User onboarding provisions one or more VMs scoped to that user — one per role if they choose a team.
-- Agent VMs are stateful: each has its own Hermes memory store persisted in Google Cloud Volumes, private per agent.
-- Agent lifecycle management: start, stop, restart VMs without losing memory or context.
+- One Firecracker microVM per agent (not per user). Each agent runs in its own isolated microVM on a managed runtime host.
+- User onboarding provisions one or more persistent agent runtimes scoped to that user — one microVM per role if they choose a team.
+- Agent runtimes are stateful: each has its own Hermes memory store, private per agent, while the team shared workspace is the only sanctioned cross-agent file surface.
+- Agent lifecycle management: start, stop, and restart microVMs without losing memory or context.
+- The control plane must support mixed-mode testing: local `sutra_backend` and local `frontend` talking to a GCP-hosted runtime host.
 
 *Why Firecracker:* strong isolation boundary per agent, fast boot, low overhead — lets us run many agents without the cost of full VMs.
 

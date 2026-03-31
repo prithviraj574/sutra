@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { type Agent, type AgentResponsePayload, type Artifact, type ChatMessage, type SharedWorkspaceItem } from "../../lib/api";
+import { type Agent, type Artifact, type ChatMessage, type ConversationStreamEvent, type SharedWorkspaceItem } from "../../lib/api";
 import { useApiClient, useBackendSession } from "../auth/useSession";
 import { readAgentChatParams } from "./routes";
 import { buildWorkspaceExportPath, listAgentConversationWorkspaceItems } from "./workspace";
@@ -17,13 +17,6 @@ type ChatPageProps = {
   agentId: string;
 };
 
-function toChatMessages(response: AgentResponsePayload, prompt: string): LocalChatMessage[] {
-  return [
-    { id: `${response.response_id}:user`, role: "user", content: prompt },
-    { id: `${response.response_id}:assistant`, role: "assistant", content: response.output_text },
-  ];
-}
-
 function mapPersistedMessages(messages: ChatMessage[]): LocalChatMessage[] {
   return messages
     .filter((message) => message.actor_type === "user" || message.actor_type === "assistant")
@@ -32,6 +25,13 @@ function mapPersistedMessages(messages: ChatMessage[]): LocalChatMessage[] {
       role: message.actor_type === "assistant" ? "assistant" : "user",
       content: message.content,
     }));
+}
+
+function toggleSelection(current: string[], nextId: string): string[] {
+  if (current.includes(nextId)) {
+    return current.filter((id) => id !== nextId);
+  }
+  return [...current, nextId];
 }
 
 export function ChatPage({ agentId }: ChatPageProps) {
@@ -50,6 +50,9 @@ export function ChatPage({ agentId }: ChatPageProps) {
   const [selectedRepository, setSelectedRepository] = useState("");
   const [exportPath, setExportPath] = useState("app/agent-output.md");
   const [commitMessage, setCommitMessage] = useState("Export agent output");
+  const [selectedSecretIds, setSelectedSecretIds] = useState<string[]>([]);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const [pendingPromptPreview, setPendingPromptPreview] = useState("");
 
   const agents = useQuery({
     queryKey: ["agents", session.data?.user.id],
@@ -93,8 +96,25 @@ export function ChatPage({ agentId }: ChatPageProps) {
     enabled: !!githubConnection.data?.connection,
     retry: false,
   });
+  const secrets = useQuery({
+    queryKey: ["secrets", session.data?.user.id],
+    queryFn: () => api.listSecrets(),
+    enabled: !!session.data,
+  });
   const provisionRuntime = useMutation({
     mutationFn: () => api.provisionAgentRuntime(agentId),
+  });
+  const verifyRuntime = useMutation({
+    mutationFn: () => api.verifyAgentRuntime(agentId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
+    },
+  });
+  const restartRuntime = useMutation({
+    mutationFn: () => api.restartAgentRuntime(agentId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
+    },
   });
   const persistedMessages = useQuery({
     queryKey: ["conversation-messages", activeConversationId],
@@ -121,21 +141,106 @@ export function ChatPage({ agentId }: ChatPageProps) {
     setSelectedRepository(githubRepositories.data.items[0].full_name);
   }, [githubRepositories.data?.items, selectedRepository]);
 
+  useEffect(() => {
+    if (!activeConversationId) {
+      return;
+    }
+
+    let cancelled = false;
+    let closeStream = () => {};
+    setStreamError(null);
+
+    function handleStreamEvent(event: ConversationStreamEvent) {
+      if (cancelled) {
+        return;
+      }
+      if (event.type === "assistant.message_delta") {
+        const messageId = String(event.payload.message_id ?? `${event.event_id}:assistant`);
+        const text = String(event.payload.text ?? "");
+        setMessages((current) =>
+          current.some((entry) => entry.id === messageId)
+            ? current
+            : [...current, { id: messageId, role: "assistant", content: text }],
+        );
+        return;
+      }
+      if (event.type === "run.started") {
+        const messageId = String(event.payload.message_id ?? `${event.event_id}:user`);
+        setMessages((current) =>
+          current.some((entry) => entry.id === messageId)
+            ? current
+            : [...current, { id: messageId, role: "user", content: pendingPromptPreview || "Working..." }],
+        );
+        return;
+      }
+      if (event.type === "workspace.item_created") {
+        const itemId = String(event.payload.item_id ?? "");
+        if (!itemId) {
+          return;
+        }
+        setLatestGeneratedItemIds((current) =>
+          current.includes(itemId) ? current : [itemId, ...current].slice(0, 3),
+        );
+        setSelectedWorkspaceItemId(itemId);
+        void queryClient.invalidateQueries({ queryKey: ["team-workspace", agent?.team_id] });
+        return;
+      }
+      if (event.type === "runtime.state_changed") {
+        void queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
+        return;
+      }
+      if (event.type === "run.completed") {
+        void queryClient.invalidateQueries({ queryKey: ["conversation-messages", activeConversationId] });
+      }
+    }
+
+    void api
+      .streamConversationEvents(activeConversationId, {
+        onEvent: handleStreamEvent,
+        onError: (error) => {
+          if (!cancelled) {
+            setStreamError(error.message);
+          }
+        },
+      })
+      .then((subscription) => {
+        if (cancelled) {
+          subscription.close();
+          return;
+        }
+        closeStream = subscription.close;
+      });
+
+    return () => {
+      cancelled = true;
+      closeStream();
+    };
+  }, [activeConversationId, agent?.team_id, agentId, api, pendingPromptPreview, queryClient]);
+
   const responseMutation = useMutation({
     mutationFn: (prompt: string) =>
       api.createAgentResponse(agentId, {
         input: prompt,
         conversation_id: activeConversationId,
+        secret_ids: selectedSecretIds,
       }),
-    onSuccess: (response, prompt) => {
+    onSuccess: async (response) => {
+      setPendingPromptPreview("");
       setConversationId(response.conversation_id);
       if (response.workspace_item_id) {
         setLatestGeneratedItemIds([response.workspace_item_id]);
         setSelectedWorkspaceItemId(response.workspace_item_id);
       }
-      setMessages((current) => [...current, ...toChatMessages(response, prompt)]);
-      void queryClient.invalidateQueries({ queryKey: ["team-workspace", agent?.team_id] });
-      void queryClient.invalidateQueries({ queryKey: ["team-artifacts", agent?.team_id] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["conversation-messages", response.conversation_id] }),
+        queryClient.invalidateQueries({ queryKey: ["agent-conversations", agentId] }),
+        queryClient.invalidateQueries({ queryKey: ["team-workspace", agent?.team_id] }),
+        queryClient.invalidateQueries({ queryKey: ["team-artifacts", agent?.team_id] }),
+        queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] }),
+      ]);
+    },
+    onError: () => {
+      setPendingPromptPreview("");
     },
   });
 
@@ -185,6 +290,7 @@ export function ChatPage({ agentId }: ChatPageProps) {
       return;
     }
 
+    setPendingPromptPreview(prompt);
     setDraft("");
     void (async () => {
       if (!runtime.data && !provisionRuntime.isPending) {
@@ -204,6 +310,10 @@ export function ChatPage({ agentId }: ChatPageProps) {
       return;
     }
     void exportMutation.mutateAsync();
+  }
+
+  function toggleSecret(secretId: string) {
+    setSelectedSecretIds((current) => toggleSelection(current, secretId));
   }
 
   const selectedWorkspaceItem = useMemo<SharedWorkspaceItem | null>(
@@ -276,6 +386,64 @@ export function ChatPage({ agentId }: ChatPageProps) {
             </Link>
           </header>
 
+          <div className="mb-6 rounded border border-border bg-surface px-4 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">Runtime</p>
+                <p className="mt-2 text-sm text-primary">
+                  {runtime.data?.lease.readiness_stage ?? "provisioning"} · {runtime.data?.lease.readiness_reason ?? "Runtime status not loaded yet."}
+                </p>
+                <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted">
+                  Provider {runtime.data?.lease.provider ?? agent?.runtime_kind ?? "unknown"} · Isolation {runtime.data?.lease.isolation_ok ? "verified" : "pending"}
+                </p>
+                {runtime.data?.lease.host_vm_id ? (
+                  <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted">
+                    Host {runtime.data.lease.host_vm_id}
+                  </p>
+                ) : null}
+                {runtime.data?.lease.probe_detail ? (
+                  <p className="mt-2 text-xs text-muted">{runtime.data.lease.probe_detail}</p>
+                ) : null}
+                {provisionRuntime.error ? (
+                  <p className="mt-2 text-xs text-primary">{provisionRuntime.error.message}</p>
+                ) : null}
+                {verifyRuntime.error ? (
+                  <p className="mt-2 text-xs text-primary">{verifyRuntime.error.message}</p>
+                ) : null}
+                {restartRuntime.error ? (
+                  <p className="mt-2 text-xs text-primary">{restartRuntime.error.message}</p>
+                ) : null}
+                {streamError ? <p className="mt-2 text-xs text-primary">{streamError}</p> : null}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  className="btn-secondary"
+                  disabled={provisionRuntime.isPending}
+                  onClick={() => void provisionRuntime.mutateAsync()}
+                  type="button"
+                >
+                  {provisionRuntime.isPending ? "Provisioning..." : "Provision"}
+                </button>
+                <button
+                  className="btn-secondary"
+                  disabled={verifyRuntime.isPending}
+                  onClick={() => void verifyRuntime.mutateAsync()}
+                  type="button"
+                >
+                  {verifyRuntime.isPending ? "Verifying..." : "Verify"}
+                </button>
+                <button
+                  className="btn-secondary"
+                  disabled={restartRuntime.isPending}
+                  onClick={() => void restartRuntime.mutateAsync()}
+                  type="button"
+                >
+                  {restartRuntime.isPending ? "Restarting..." : "Restart"}
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div className="space-y-6 pb-32">
             {messages.length === 0 ? (
               <p className="text-sm text-muted">Prompt an agent to start a persisted conversation.</p>
@@ -306,11 +474,36 @@ export function ChatPage({ agentId }: ChatPageProps) {
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
               />
+              <div className="mt-3 px-3">
+                <p className="text-xs uppercase tracking-[0.18em] text-muted">Secrets For This Run</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(secrets.data?.items ?? []).map((secret) => {
+                    const selected = selectedSecretIds.includes(secret.id);
+                    return (
+                      <button
+                        className={`rounded border px-2 py-1 text-xs transition-colors ${
+                          selected
+                            ? "border-primary bg-background text-primary"
+                            : "border-border bg-background text-muted hover:border-primary"
+                        }`}
+                        key={secret.id}
+                        onClick={() => toggleSecret(secret.id)}
+                        type="button"
+                      >
+                        {secret.name}
+                      </button>
+                    );
+                  })}
+                  {(secrets.data?.items ?? []).length === 0 ? (
+                    <span className="text-xs text-muted">No stored secrets selected.</span>
+                  ) : null}
+                </div>
+              </div>
               <div className="mt-3 flex items-center justify-between px-3 pb-1">
                 <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-muted">{agent?.role_name ?? "Generalist"}</p>
                   <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-muted">
-                    Runtime {runtime.data?.lease.state ?? "not provisioned"}
+                    Runtime {runtime.data?.lease.readiness_stage ?? runtime.data?.lease.state ?? "not provisioned"}
                   </p>
                 </div>
                 <button className="btn-primary" type="submit">
@@ -321,10 +514,10 @@ export function ChatPage({ agentId }: ChatPageProps) {
           </form>
         </section>
 
-        <section className="relative hidden bg-surface lg:block">
-          <div className="absolute inset-10">
-            <div className="absolute inset-x-8 top-10 h-24 rounded-full aura-glow" />
-            <div className="aura-border relative flex h-full flex-col rounded-lg bg-background/90 p-10">
+        <section className="relative bg-surface px-6 py-8 lg:px-0 lg:py-0">
+          <div className="relative lg:absolute lg:inset-10">
+            <div className="absolute inset-x-8 top-10 hidden h-24 rounded-full aura-glow lg:block" />
+            <div className="aura-border relative flex h-full flex-col rounded-lg bg-background/90 p-6 lg:p-10">
               <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted">Artifact Surface</p>
               <div className="mt-8 grid flex-1 grid-rows-[minmax(0,1fr)_auto_auto] gap-6">
                 <div className="rounded border border-border bg-surface p-5">

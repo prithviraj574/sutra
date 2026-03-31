@@ -74,13 +74,21 @@ export type RuntimeLease = {
   id: string;
   agent_id: string;
   vm_id: string;
+  host_vm_id?: string | null;
+  host_api_base_url?: string | null;
   state: string;
+  provider: string;
   api_base_url?: string | null;
   last_heartbeat_at?: string | null;
   started_at?: string | null;
   ready: boolean;
   heartbeat_fresh: boolean;
+  readiness_stage: string;
   readiness_reason: string;
+  probe_detail?: string | null;
+  probe_checked_url?: string | null;
+  isolation_ok: boolean;
+  isolation_reason: string;
   created_at: string;
   updated_at: string;
 };
@@ -163,6 +171,7 @@ export type GitHubConnectionStatusPayload = {
 export type AgentResponseInput = {
   input: string;
   conversation_id?: string;
+  secret_ids?: string[];
 };
 
 export type AgentResponsePayload = {
@@ -236,6 +245,53 @@ export type Artifact = {
 
 export type TeamArtifactListPayload = {
   items: Artifact[];
+};
+
+export type AutomationJob = {
+  id: string;
+  team_id?: string | null;
+  agent_id?: string | null;
+  name: string;
+  schedule: string;
+  prompt: string;
+  enabled: boolean;
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AutomationJobListPayload = {
+  items: AutomationJob[];
+};
+
+export type AutomationJobCreateInput = {
+  name: string;
+  schedule: string;
+  prompt: string;
+  team_id?: string;
+  agent_id?: string;
+  enabled?: boolean;
+};
+
+export type AutomationJobUpdateInput = {
+  name?: string;
+  schedule?: string;
+  prompt?: string;
+  enabled?: boolean;
+};
+
+export type AutomationJobPayload = {
+  job: AutomationJob;
+};
+
+export type AutomationJobRunPayload = {
+  job: AutomationJob;
+  conversation_id?: string | null;
+  response_id?: string | null;
+  output_text?: string | null;
+  workspace_item_id?: string | null;
+  generated_items: SharedWorkspaceItem[];
 };
 
 export type WorkspaceItemCreateInput = {
@@ -346,6 +402,7 @@ export type TeamTaskCompleteInput = {
 export type TeamResponseInput = {
   input: string;
   conversation_id?: string;
+  secret_ids?: string[];
 };
 
 export type TeamResponsePayload = {
@@ -359,6 +416,7 @@ export type TeamResponsePayload = {
 export type TeamHuddleInput = {
   input: string;
   conversation_id?: string;
+  secret_ids?: string[];
 };
 
 export type TeamHuddlePayload = {
@@ -399,6 +457,26 @@ export type GitHubExportPayload = {
   commit_url: string;
 };
 
+export type ConversationStreamEvent = {
+  event_id: string;
+  type: string;
+  conversation_id: string;
+  agent_id?: string | null;
+  timestamp: string;
+  sequence: number;
+  payload: Record<string, unknown>;
+};
+
+export type ConversationStreamHandlers = {
+  onEvent: (event: ConversationStreamEvent) => void;
+  onError?: (error: Error) => void;
+};
+
+export type ConversationStreamSubscription = {
+  close: () => void;
+  done: Promise<void>;
+};
+
 type ApiClientOptions = {
   baseUrl: string;
   getAccessToken: () => Promise<string | null>;
@@ -433,9 +511,101 @@ export function createApiClient(options: ApiClientOptions) {
     return (await response.json()) as T;
   }
 
+  async function stream(
+    path: string,
+    handlers: ConversationStreamHandlers,
+  ): Promise<ConversationStreamSubscription> {
+    const controller = new AbortController();
+    const token = await options.getAccessToken();
+    const headers = new Headers();
+    headers.set("Accept", "text/event-stream");
+    if (token) {
+      headers.set("Authorization", `Bearer ${token}`);
+    }
+
+    const done = (async () => {
+      try {
+        const response = await fetcher(`${options.baseUrl}${path}`, {
+          method: "GET",
+          headers,
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Request failed with ${response.status}`);
+        }
+        if (!response.body) {
+          throw new Error("Streaming response body was empty.");
+        }
+
+        const decoder = new TextDecoder();
+        const reader = response.body.getReader();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const segments = buffer.split("\n\n");
+          buffer = segments.pop() ?? "";
+
+          for (const segment of segments) {
+            const dataLine = segment
+              .split("\n")
+              .find((line) => line.startsWith("data: "));
+            if (!dataLine) {
+              continue;
+            }
+            handlers.onEvent(JSON.parse(dataLine.slice(6)) as ConversationStreamEvent);
+          }
+        }
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return;
+        }
+        handlers.onError?.(
+          error instanceof Error ? error : new Error("Conversation stream failed."),
+        );
+      }
+    })();
+
+    return {
+      close: () => controller.abort(),
+      done,
+    };
+  }
+
   return {
     readSession: () => request<SessionPayload>("/api/auth/me"),
     readPollerStatus: () => request<PollerStatusPayload>("/api/system/poller"),
+    listAutomationJobs: (filters?: { teamId?: string; agentId?: string }) => {
+      const params = new URLSearchParams();
+      if (filters?.teamId) {
+        params.set("team_id", filters.teamId);
+      }
+      if (filters?.agentId) {
+        params.set("agent_id", filters.agentId);
+      }
+      const suffix = params.size ? `?${params.toString()}` : "";
+      return request<AutomationJobListPayload>(`/api/jobs${suffix}`);
+    },
+    createAutomationJob: (payload: AutomationJobCreateInput) =>
+      request<AutomationJobPayload>("/api/jobs", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
+    updateAutomationJob: (jobId: string, payload: AutomationJobUpdateInput) =>
+      request<AutomationJobPayload>(`/api/jobs/${jobId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      }),
+    runAutomationJob: (jobId: string) =>
+      request<AutomationJobRunPayload>(`/api/jobs/${jobId}/run`, {
+        method: "POST",
+      }),
     readGitHubConnection: () => request<GitHubConnectionStatusPayload>("/api/auth/github/connection"),
     listGitHubRepositories: () => request<GitHubRepositoryListPayload>("/api/github/repositories"),
     listRoleTemplates: () => request<RoleTemplateListPayload>("/api/role-templates"),
@@ -519,6 +689,14 @@ export function createApiClient(options: ApiClientOptions) {
       ),
     readAgentRuntime: (agentId: string) =>
       request<RuntimeLeasePayload>(`/api/agents/${agentId}/runtime`),
+    verifyAgentRuntime: (agentId: string) =>
+      request<RuntimeLeasePayload>(`/api/agents/${agentId}/runtime/verify`, {
+        method: "POST",
+      }),
+    restartAgentRuntime: (agentId: string) =>
+      request<RuntimeLeasePayload>(`/api/agents/${agentId}/runtime/restart`, {
+        method: "POST",
+      }),
     provisionAgentRuntime: (agentId: string) =>
       request<RuntimeLeasePayload>(`/api/agents/${agentId}/runtime/provision`, {
         method: "POST",
@@ -537,6 +715,8 @@ export function createApiClient(options: ApiClientOptions) {
       request<ConversationListPayload>(`/api/agents/${agentId}/conversations`),
     listConversationMessages: (conversationId: string) =>
       request<MessageListPayload>(`/api/conversations/${conversationId}/messages`),
+    streamConversationEvents: (conversationId: string, handlers: ConversationStreamHandlers) =>
+      stream(`/api/conversations/${conversationId}/stream`, handlers),
     createAgentResponse: (agentId: string, payload: AgentResponseInput) =>
       request<AgentResponsePayload>(`/api/agents/${agentId}/responses`, {
         method: "POST",

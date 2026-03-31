@@ -917,7 +917,7 @@ describe("api client", () => {
     expect(artifacts.items[0].github_repo).toBe("octocat/launch-repo");
   });
 
-  it("can provision and read an agent runtime lease", async () => {
+  it("can provision and verify an agent runtime lease", async () => {
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce({
@@ -928,7 +928,16 @@ describe("api client", () => {
             agent_id: "agent-1",
             vm_id: "local-dev-agent",
             state: "running",
+            provider: "static_dev",
             api_base_url: "http://runtime.internal",
+            ready: true,
+            heartbeat_fresh: true,
+            readiness_stage: "api_reachable",
+            readiness_reason: "Runtime is ready for requests.",
+            probe_detail: null,
+            probe_checked_url: null,
+            isolation_ok: true,
+            isolation_reason: "isolated",
             created_at: "2026-03-28T00:00:00Z",
             updated_at: "2026-03-28T00:00:00Z",
           },
@@ -942,7 +951,39 @@ describe("api client", () => {
             agent_id: "agent-1",
             vm_id: "local-dev-agent",
             state: "running",
+            provider: "static_dev",
             api_base_url: "http://runtime.internal",
+            ready: true,
+            heartbeat_fresh: true,
+            readiness_stage: "responses_ready",
+            readiness_reason: "Runtime accepted a verification response request.",
+            probe_detail: "Runtime accepted a verification response request.",
+            probe_checked_url: "http://runtime.internal/v1/responses",
+            isolation_ok: true,
+            isolation_reason: "isolated",
+            created_at: "2026-03-28T00:00:00Z",
+            updated_at: "2026-03-28T00:00:00Z",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          lease: {
+            id: "lease-1",
+            agent_id: "agent-1",
+            vm_id: "local-dev-agent",
+            state: "running",
+            provider: "static_dev",
+            api_base_url: "http://runtime.internal",
+            ready: true,
+            heartbeat_fresh: true,
+            readiness_stage: "api_reachable",
+            readiness_reason: "Runtime is ready for requests.",
+            probe_detail: null,
+            probe_checked_url: null,
+            isolation_ok: true,
+            isolation_reason: "isolated",
             created_at: "2026-03-28T00:00:00Z",
             updated_at: "2026-03-28T00:00:00Z",
           },
@@ -956,7 +997,8 @@ describe("api client", () => {
     });
 
     const provisioned = await api.provisionAgentRuntime("agent-1");
-    const runtime = await api.readAgentRuntime("agent-1");
+    const runtime = await api.verifyAgentRuntime("agent-1");
+    const restarted = await api.restartAgentRuntime("agent-1");
 
     expect(fetcher).toHaveBeenNthCalledWith(
       1,
@@ -965,11 +1007,147 @@ describe("api client", () => {
     );
     expect(fetcher).toHaveBeenNthCalledWith(
       2,
-      "http://localhost:8000/api/agents/agent-1/runtime",
+      "http://localhost:8000/api/agents/agent-1/runtime/verify",
       expect.objectContaining({ headers: expect.any(Headers) }),
     );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      "http://localhost:8000/api/agents/agent-1/runtime/restart",
+      expect.objectContaining({ method: "POST" }),
+    );
     expect(provisioned.lease.state).toBe("running");
+    expect(provisioned.lease.provider).toBe("static_dev");
+    expect(runtime.lease.readiness_stage).toBe("responses_ready");
     expect(runtime.lease.vm_id).toBe("local-dev-agent");
+    expect(restarted.lease.state).toBe("running");
+  });
+
+  it("can create, list, update, and run automation jobs", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          job: {
+            id: "job-1",
+            team_id: "team-1",
+            agent_id: null,
+            name: "Weekly Team Review",
+            schedule: "0 9 * * 1",
+            prompt: "Review the shared workspace and summarize priorities.",
+            enabled: true,
+            last_run_at: null,
+            next_run_at: null,
+            created_at: "2026-03-28T00:00:00Z",
+            updated_at: "2026-03-28T00:00:00Z",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          items: [
+            {
+              id: "job-1",
+              team_id: "team-1",
+              agent_id: null,
+              name: "Weekly Team Review",
+              schedule: "0 9 * * 1",
+              prompt: "Review the shared workspace and summarize priorities.",
+              enabled: true,
+              last_run_at: null,
+              next_run_at: null,
+              created_at: "2026-03-28T00:00:00Z",
+              updated_at: "2026-03-28T00:00:00Z",
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          job: {
+            id: "job-1",
+            team_id: "team-1",
+            agent_id: null,
+            name: "Weekly Team Review",
+            schedule: "0 10 * * 1",
+            prompt: "Review the shared workspace and summarize priorities.",
+            enabled: false,
+            last_run_at: null,
+            next_run_at: null,
+            created_at: "2026-03-28T00:00:00Z",
+            updated_at: "2026-03-28T00:05:00Z",
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          job: {
+            id: "job-1",
+            team_id: "team-1",
+            agent_id: null,
+            name: "Weekly Team Review",
+            schedule: "0 10 * * 1",
+            prompt: "Review the shared workspace and summarize priorities.",
+            enabled: true,
+            last_run_at: "2026-03-28T01:00:00Z",
+            next_run_at: null,
+            created_at: "2026-03-28T00:00:00Z",
+            updated_at: "2026-03-28T01:00:00Z",
+          },
+          conversation_id: "conversation-1",
+          response_id: "response-1",
+          output_text: "Automation summary",
+          workspace_item_id: "workspace-item-1",
+          generated_items: [],
+        }),
+      });
+
+    const api = createApiClient({
+      baseUrl: "http://localhost:8000",
+      getAccessToken: async () => "token-123",
+      fetcher,
+    });
+
+    const created = await api.createAutomationJob({
+      team_id: "team-1",
+      name: "Weekly Team Review",
+      schedule: "0 9 * * 1",
+      prompt: "Review the shared workspace and summarize priorities.",
+    });
+    const listed = await api.listAutomationJobs({ teamId: "team-1" });
+    const updated = await api.updateAutomationJob("job-1", {
+      enabled: false,
+      schedule: "0 10 * * 1",
+    });
+    const ran = await api.runAutomationJob("job-1");
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      "http://localhost:8000/api/jobs",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      "http://localhost:8000/api/jobs?team_id=team-1",
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      "http://localhost:8000/api/jobs/job-1",
+      expect.objectContaining({ method: "PATCH" }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      4,
+      "http://localhost:8000/api/jobs/job-1/run",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(created.job.name).toBe("Weekly Team Review");
+    expect(listed.items).toHaveLength(1);
+    expect(updated.job.enabled).toBe(false);
+    expect(ran.output_text).toBe("Automation summary");
   });
 
   it("can create, list, and delete secrets through the vault api", async () => {

@@ -1,8 +1,8 @@
 # Sutra Phase 1 Execution Plan
 
 Status: Approved and in execution  
-Execution State: Milestone 1 in progress  
-Last Updated: 2026-03-30  
+Execution State: Firecracker-host runtime proof and isolation hardening in progress  
+Last Updated: 2026-03-31  
 Primary Reference: [`meta/PRD/phase_1_managed_hermes_wrapper.md`](/Users/prithviraj/Desktop/Misc/sutra/meta/PRD/phase_1_managed_hermes_wrapper.md)
 
 ## Current Progress
@@ -71,12 +71,27 @@ Completed in the first execution pass:
 - the GCP runtime startup contract now goes one step further: provisioning metadata includes a concrete host bootstrap flow that mounts the persistent state disk, sets `HERMES_HOME` on the mounted filesystem, enables the Hermes API server, and launches `gateway.run` as a managed system service instead of leaving VM boot behavior implicit
 - local runtime provisioning can now authenticate to GCP with the checked-in service account file instead of requiring only metadata-server auth or a manually pasted access token, which makes local control-plane-to-GCP testing realistic
 - Compute Engine API has been enabled in the current GCP project and a pinned Hermes runtime source bundle has been uploaded to GCS for host bootstrap, so the next infra step can move from cloud-prep into actual tiny-host provisioning
+- runtime status now has a deeper verification path with isolation checks, and the control plane exposes explicit runtime provider/readiness/isolation fields instead of only raw lease state
+- runtime bootstrap and env docs now explicitly treat the shared workspace as the only sanctioned cross-agent file surface; private agent state paths must remain outside it
+- hosted runtime recovery is now a first-class control-plane path: agents can be restarted through the API and web UI, and the local runtime harness now includes a restart helper in addition to provision/verify/teardown/isolation checks
+- automation jobs now have a first real surface: the control plane can create/list/update/run saved jobs, and the Team Workspace exposes a simple team-scoped automation panel for repeatable runs
+- the hosted runtime architecture has been refactored away from one GCP instance per agent: the control plane now targets one GCP Firecracker host VM with per-agent microVM IDs, host-aware lease metadata, and host-proxy runtime URLs
+- a first host-manager service now exists on the runtime host path, with persisted microVM records, config generation, restart hooks, and a dev fallback path that still lets local backend/frontend exercise the remote-host control-plane contract
+- runtime migrations now explicitly cover host-aware lease metadata and automation jobs instead of relying on ORM-only changes
+- the first real GCP runtime host is now provisioned in `project-3130b11c-429f-49aa-88e` as `sutra-firecracker-host`, with firewall, router/NAT, persistent state disk, and a working host-manager API exposed through IAP tunnel access
+- the mixed-mode developer path now works live: local `sutra_backend` and local `frontend` can run against the remote GCP runtime host using the repo launch scripts and local Firebase config
+- first-sign-in runtime provisioning now succeeds through the real remote host path, and runtime verification confirms request-readiness plus private-filesystem isolation from the local control plane
+- the remaining live runtime blocker is upstream Hermes/provider auth inside the hosted agent process: agent runs currently complete through the control-plane path but can return provider-auth errors until managed LLM/browser credentials are injected
 
 Next on the critical path:
 
+- prove the hosted runtime path on a real tiny GCP Firecracker host, including restart persistence and explicit cross-agent filesystem isolation
+- switch the live host from host-process fallback into true Firecracker guest execution once the host image, guest kernel/rootfs, and guest networking/bootstrap path are implemented end to end
+- use the new runtime verify endpoint and operational harness to confirm only the shared workspace is cross-agent visible
+- finish the first fully live host-manager path so `GCP_RUNTIME_FIRECRACKER_EXECUTE=true` is exercised against a real host image/rootfs pair instead of only the host-local fallback launcher
+- validate the mixed-mode developer flow: local `sutra_backend` + local `frontend` against a remote GCP runtime host
 - keep tightening the core Phase 1 loop: onboarding -> agent chat -> persisted history -> GitHub-owned output
 - fix user-facing flow gaps before adding new surface area
-- keep making the GitHub-owned output loop feel complete from the web app, especially for single-agent flows and clearer end-to-end demos
 - deepen inter-agent coordination beyond sequential orchestration so teams can delegate and converge more naturally
 - extend the inbox model beyond user-driven task actions so agents can actively pick up, delegate, and report on tasks without the control plane simulating every step
 - tighten how shared workspace artifacts feed subsequent agent runs so the team folder behaves more like durable working memory than only a file browser

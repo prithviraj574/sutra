@@ -89,6 +89,22 @@ class Settings(BaseSettings):
         default="e2-small",
         validation_alias=AliasChoices("GCP_RUNTIME_MACHINE_TYPE"),
     )
+    gcp_runtime_host_instance_name: str = Field(
+        default="sutra-firecracker-host",
+        validation_alias=AliasChoices("GCP_RUNTIME_HOST_INSTANCE_NAME"),
+    )
+    gcp_runtime_host_api_port: int = Field(
+        default=8787,
+        validation_alias=AliasChoices("GCP_RUNTIME_HOST_API_PORT"),
+    )
+    gcp_runtime_host_api_override_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GCP_RUNTIME_HOST_API_OVERRIDE_BASE_URL"),
+    )
+    gcp_runtime_host_api_bind_host: str = Field(
+        default="0.0.0.0",
+        validation_alias=AliasChoices("GCP_RUNTIME_HOST_API_BIND_HOST"),
+    )
     gcp_runtime_boot_disk_size_gb: int = Field(
         default=20,
         validation_alias=AliasChoices("GCP_RUNTIME_BOOT_DISK_SIZE_GB"),
@@ -121,6 +137,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("GCP_RUNTIME_SUBNETWORK"),
     )
+    gcp_runtime_assign_public_ip: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("GCP_RUNTIME_ASSIGN_PUBLIC_IP"),
+    )
+    gcp_runtime_use_public_ip: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("GCP_RUNTIME_USE_PUBLIC_IP"),
+    )
     gcp_runtime_service_account_email: str | None = Field(
         default=None,
         validation_alias=AliasChoices("GCP_RUNTIME_SERVICE_ACCOUNT_EMAIL"),
@@ -132,6 +156,14 @@ class Settings(BaseSettings):
     gcp_runtime_state_mount_path: str = Field(
         default="/mnt/sutra/state",
         validation_alias=AliasChoices("GCP_RUNTIME_STATE_MOUNT_PATH"),
+    )
+    gcp_runtime_agent_root_path: str = Field(
+        default="/mnt/sutra/state/agents",
+        validation_alias=AliasChoices("GCP_RUNTIME_AGENT_ROOT_PATH"),
+    )
+    gcp_runtime_shared_workspace_root_path: str = Field(
+        default="/mnt/sutra/shared-workspaces",
+        validation_alias=AliasChoices("GCP_RUNTIME_SHARED_WORKSPACE_ROOT_PATH"),
     )
     gcp_runtime_hermes_home_path: str = Field(
         default="/mnt/sutra/state/hermes-home",
@@ -160,6 +192,30 @@ class Settings(BaseSettings):
     gcp_runtime_gateway_command: str = Field(
         default="python -m gateway.run",
         validation_alias=AliasChoices("GCP_RUNTIME_GATEWAY_COMMAND"),
+    )
+    gcp_runtime_firecracker_binary_path: str = Field(
+        default="/usr/local/bin/firecracker",
+        validation_alias=AliasChoices("GCP_RUNTIME_FIRECRACKER_BINARY_PATH"),
+    )
+    gcp_runtime_jailer_binary_path: str = Field(
+        default="/usr/local/bin/jailer",
+        validation_alias=AliasChoices("GCP_RUNTIME_JAILER_BINARY_PATH"),
+    )
+    gcp_runtime_firecracker_kernel_path: str = Field(
+        default="/opt/sutra-firecracker/vmlinux.bin",
+        validation_alias=AliasChoices("GCP_RUNTIME_FIRECRACKER_KERNEL_PATH"),
+    )
+    gcp_runtime_firecracker_rootfs_path: str = Field(
+        default="/opt/sutra-firecracker/rootfs.ext4",
+        validation_alias=AliasChoices("GCP_RUNTIME_FIRECRACKER_ROOTFS_PATH"),
+    )
+    gcp_runtime_firecracker_execute: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("GCP_RUNTIME_FIRECRACKER_EXECUTE"),
+    )
+    gcp_runtime_host_microvm_base_port: int = Field(
+        default=10080,
+        validation_alias=AliasChoices("GCP_RUNTIME_HOST_MICROVM_BASE_PORT"),
     )
     gcp_runtime_hermes_bundle_uri: str | None = Field(
         default=None,
