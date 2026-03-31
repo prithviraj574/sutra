@@ -2,6 +2,8 @@
 backend/.env
 backend/firebase-service-account.json
 backend/gcs-service-account.json
+frontend/.env
+frontend/.env.local
 __pycache__/
 .pytest_cache/
 .mypy_cache/
