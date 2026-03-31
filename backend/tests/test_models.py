@@ -14,6 +14,8 @@ from sutra_backend.models import (
     RuntimeLease,
     Secret,
     Team,
+    TeamTask,
+    TeamTaskUpdate,
     ToolEvent,
     User,
 )
@@ -123,13 +125,40 @@ def test_core_phase_one_models_persist_to_postgres(postgres_database_url: str) -
                 api_base_url="http://10.0.0.5:8642",
             )
         )
+        session.add(
+            TeamTask(
+                team_id=team.id,
+                conversation_id=conversation.id,
+                assigned_agent_id=agent.id,
+                title="Planner Task",
+                instruction="Define milestones.",
+                status="claimed",
+                source="huddle",
+                claim_token="team-run:test",
+            )
+        )
+        session.commit()
+        task = session.exec(select(TeamTask)).one()
+        session.add(
+            TeamTaskUpdate(
+                task_id=task.id,
+                team_id=team.id,
+                agent_id=agent.id,
+                event_type="reported",
+                content="Started outlining milestones.",
+            )
+        )
         session.commit()
 
         persisted_agent = session.exec(select(Agent)).one()
         persisted_job = session.exec(select(AutomationJob)).one()
+        persisted_task = session.exec(select(TeamTask)).one()
+        persisted_task_update = session.exec(select(TeamTaskUpdate)).one()
 
         assert persisted_agent.team_id == team.id
         assert persisted_job.agent_id == agent.id
+        assert persisted_task.assigned_agent_id == agent.id
+        assert persisted_task_update.task_id == task.id
 
 
 def test_bootstrap_seeds_default_agent_in_provisioning_state() -> None:

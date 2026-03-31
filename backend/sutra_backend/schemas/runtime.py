@@ -22,3 +22,4 @@ class AgentResponseCreateResponse(BaseModel):
     response_id: str
     output_text: str
     raw_response: dict[str, Any]
+    workspace_item_id: UUID | None = None

@@ -5,6 +5,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlmodel import Session, select
 
 from sutra_backend.auth.firebase import FirebaseAuthError, FirebaseIdentity, verify_firebase_token
+from sutra_backend.config import Settings, get_app_settings
 from sutra_backend.db import get_session
 from sutra_backend.models import User, utcnow
 from sutra_backend.services.bootstrap import ensure_personal_workspace
@@ -33,6 +34,7 @@ def get_current_identity(
 def get_current_user(
     identity: FirebaseIdentity = Depends(get_current_identity),
     session: Session = Depends(get_session),
+    settings: Settings = Depends(get_app_settings),
 ) -> User:
     user = session.exec(select(User).where(User.firebase_uid == identity.uid)).first()
 
@@ -52,5 +54,5 @@ def get_current_user(
 
     session.commit()
     session.refresh(user)
-    ensure_personal_workspace(session, user)
+    ensure_personal_workspace(session, user, settings=settings)
     return user

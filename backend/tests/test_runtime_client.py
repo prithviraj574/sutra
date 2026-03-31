@@ -10,6 +10,7 @@ from sutra_backend.runtime.client import (
     HermesRuntimeClient,
     HermesRuntimeTarget,
     ResponsesRequest,
+    probe_runtime_health,
 )
 
 
@@ -94,3 +95,32 @@ async def test_chat_completions_request_uses_fallback_path() -> None:
     body = json.loads(captured["body"])
     assert body["messages"][1]["content"] == "Summarize the repo."
     assert payload["choices"][0]["message"]["content"] == "Fallback completed."
+
+
+def test_runtime_health_probe_treats_http_response_as_reachable() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer runtime-key"
+        return httpx.Response(404, request=request)
+
+    transport = httpx.MockTransport(handler)
+    target = HermesRuntimeTarget(base_url="http://runtime.internal", api_key="runtime-key")
+
+    probe = probe_runtime_health(target, transport=transport)
+
+    assert probe.reachable is True
+    assert probe.status_code == 404
+    assert probe.checked_url == "http://runtime.internal/health"
+
+
+def test_runtime_health_probe_reports_unreachable_transport_error() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    transport = httpx.MockTransport(handler)
+    target = HermesRuntimeTarget(base_url="http://runtime.internal", api_key="runtime-key")
+
+    probe = probe_runtime_health(target, transport=transport)
+
+    assert probe.reachable is False
+    assert probe.status_code is None
+    assert "connection refused" in probe.detail

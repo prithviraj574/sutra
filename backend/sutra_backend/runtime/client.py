@@ -50,6 +50,14 @@ class HermesResponse:
     raw_response: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class RuntimeHealthProbe:
+    reachable: bool
+    status_code: int | None
+    checked_url: str | None
+    detail: str
+
+
 def encode_runtime_env_header(request_env: dict[str, str] | None) -> str | None:
     if not request_env:
         return None
@@ -74,6 +82,48 @@ def extract_output_text(payload: dict[str, Any]) -> str:
                 text_parts.append(text)
 
     return "\n".join(part for part in text_parts if part)
+
+
+def probe_runtime_health(
+    target: HermesRuntimeTarget,
+    *,
+    transport: httpx.BaseTransport | None = None,
+    timeout_seconds: float = 5.0,
+) -> RuntimeHealthProbe:
+    headers = {"Authorization": f"Bearer {target.api_key}"}
+    attempted_urls: list[str] = []
+    last_detail = "Runtime health probe did not receive a response."
+    last_status_code: int | None = None
+
+    with httpx.Client(
+        base_url=target.base_url,
+        timeout=timeout_seconds,
+        transport=transport,
+    ) as client:
+        for path in ("/health", "/healthz", "/"):
+            attempted_urls.append(f"{target.base_url.rstrip('/')}{path}")
+            try:
+                response = client.get(path, headers=headers)
+            except httpx.HTTPError as exc:
+                last_detail = str(exc)
+                continue
+
+            last_status_code = response.status_code
+            if response.status_code < 500:
+                return RuntimeHealthProbe(
+                    reachable=True,
+                    status_code=response.status_code,
+                    checked_url=str(response.request.url),
+                    detail="Runtime endpoint is reachable.",
+                )
+            last_detail = f"Runtime responded with {response.status_code}."
+
+    return RuntimeHealthProbe(
+        reachable=False,
+        status_code=last_status_code,
+        checked_url=attempted_urls[-1] if attempted_urls else None,
+        detail=last_detail,
+    )
 
 
 class HermesRuntimeClient:

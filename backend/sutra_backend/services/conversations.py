@@ -40,3 +40,20 @@ def list_conversation_messages(session: Session, *, user: User, conversation_id:
         .where(Message.conversation_id == conversation_id)
         .order_by(Message.created_at.asc())
     ).all()
+
+
+def list_team_conversations(session: Session, *, user: User, team_id: UUID) -> list[Conversation]:
+    owned_team = session.exec(
+        select(Team)
+        .where(Team.id == team_id)
+        .where(Team.user_id == user.id)
+    ).first()
+    if owned_team is None:
+        raise AgentNotFoundError("Team not found.")
+
+    return session.exec(
+        select(Conversation)
+        .where(Conversation.team_id == team_id)
+        .where(Conversation.mode == "team")
+        .order_by(Conversation.updated_at.desc())
+    ).all()

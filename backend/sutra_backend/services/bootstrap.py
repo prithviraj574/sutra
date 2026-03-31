@@ -4,7 +4,10 @@ from dataclasses import dataclass
 
 from sqlmodel import Session, select
 
+from sutra_backend.config import Settings
 from sutra_backend.models import Agent, RoleTemplate, Team, User
+from sutra_backend.runtime.errors import RuntimeNotReadyError
+from sutra_backend.runtime.provisioning import ensure_agent_runtime_lease
 
 
 @dataclass(frozen=True)
@@ -73,7 +76,12 @@ def ensure_role_templates(session: Session) -> dict[str, RoleTemplate]:
     return refreshed_templates
 
 
-def ensure_personal_workspace(session: Session, user: User) -> tuple[Team, Agent]:
+def ensure_personal_workspace(
+    session: Session,
+    user: User,
+    *,
+    settings: Settings | None = None,
+) -> tuple[Team, Agent]:
     templates_by_key = ensure_role_templates(session)
     default_template = templates_by_key["generalist"]
 
@@ -104,5 +112,10 @@ def ensure_personal_workspace(session: Session, user: User) -> tuple[Team, Agent
         session.add(agent)
         session.commit()
         session.refresh(agent)
+        if settings is not None:
+            try:
+                ensure_agent_runtime_lease(session, agent=agent, settings=settings)
+            except RuntimeNotReadyError:
+                session.refresh(agent)
 
     return team, agent

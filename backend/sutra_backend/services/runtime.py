@@ -7,11 +7,13 @@ from uuid import UUID
 from sqlmodel import Session, select
 
 from sutra_backend.config import Settings
-from sutra_backend.models import Agent, Conversation, Message, RuntimeLease, Team, User
+from sutra_backend.models import Agent, Conversation, Message, RuntimeLease, Team, User, utcnow
 from sutra_backend.runtime.client import HermesResponse, HermesRuntimeClient, HermesRuntimeTarget, ResponsesRequest
 from sutra_backend.runtime.errors import RuntimeNotReadyError
 from sutra_backend.runtime.provisioning import ensure_agent_runtime_lease
+from sutra_backend.services.runtime_leases import reconcile_runtime_lease
 from sutra_backend.services.secrets import resolve_secret_env
+from sutra_backend.services.teams import upsert_workspace_item
 
 
 class AgentNotFoundError(RuntimeError):
@@ -22,6 +24,15 @@ class AgentNotFoundError(RuntimeError):
 class AgentResponseResult:
     conversation: Conversation
     runtime_response: HermesResponse
+    workspace_item_id: UUID | None
+
+
+def build_agent_runtime_conversation_name(
+    *,
+    conversation: Conversation,
+    agent: Agent,
+) -> str:
+    return f"agent:{agent.id}:conversation:{conversation.id}"
 
 
 def get_owned_agent(session: Session, *, agent_id: UUID, user: User) -> Agent:
@@ -89,8 +100,16 @@ async def run_agent_response(
     settings: Settings,
 ) -> AgentResponseResult:
     agent = get_owned_agent(session, agent_id=agent_id, user=user)
-    lease = ensure_agent_runtime_lease(session, agent=agent, settings=settings)
-    target = build_runtime_target(lease=lease, settings=settings)
+    ensure_agent_runtime_lease(session, agent=agent, settings=settings)
+    lease_status = reconcile_runtime_lease(
+        session,
+        user=user,
+        agent_id=agent.id,
+        settings=settings,
+    )
+    if not lease_status.ready:
+        raise RuntimeNotReadyError(lease_status.readiness_reason)
+    target = build_runtime_target(lease=lease_status.lease, settings=settings)
     conversation = get_or_create_conversation(
         session,
         agent=agent,
@@ -98,6 +117,11 @@ async def run_agent_response(
     )
 
     effective_previous_response_id = request.previous_response_id or conversation.latest_response_id
+    runtime_conversation = (
+        None
+        if request.previous_response_id is not None
+        else build_agent_runtime_conversation_name(conversation=conversation, agent=agent)
+    )
     request_env = resolve_secret_env(
         session,
         user=user,
@@ -124,7 +148,8 @@ async def run_agent_response(
         ResponsesRequest(
             input=request.input,
             instructions=request.instructions,
-            previous_response_id=effective_previous_response_id,
+            previous_response_id=request.previous_response_id or None,
+            conversation=runtime_conversation,
             store=request.store,
             model=request.model,
             metadata=request.metadata,
@@ -142,11 +167,28 @@ async def run_agent_response(
         )
     )
     conversation.latest_response_id = runtime_response.response_id
+    conversation.updated_at = utcnow()
     session.add(conversation)
     session.commit()
     session.refresh(conversation)
 
+    workspace_item = upsert_workspace_item(
+        session,
+        user=user,
+        team_id=agent.team_id,
+        path=f"conversations/{conversation.id}.md",
+        kind="file",
+        content_text=(
+            f"# Conversation {conversation.id}\n\n"
+            f"## User\n\n{_serialize_user_input(request.input)}\n\n"
+            f"## Assistant\n\n{runtime_response.output_text}\n"
+        ),
+        conversation_id=conversation.id,
+        agent_id=agent.id,
+    )
+
     return AgentResponseResult(
         conversation=conversation,
         runtime_response=runtime_response,
+        workspace_item_id=workspace_item.id,
     )

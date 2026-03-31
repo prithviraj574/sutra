@@ -16,6 +16,9 @@ class RuntimeLeaseRead(BaseModel):
     api_base_url: str | None = None
     last_heartbeat_at: datetime | None = None
     started_at: datetime | None = None
+    ready: bool
+    heartbeat_fresh: bool
+    readiness_reason: str
     created_at: datetime
     updated_at: datetime
 

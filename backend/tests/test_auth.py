@@ -9,7 +9,8 @@ from sqlmodel import Session, SQLModel, select
 from sutra_backend.auth import dependencies as auth_dependencies
 from sutra_backend.db import create_database_engine, get_session
 from sutra_backend.main import create_app
-from sutra_backend.models import Agent, RoleTemplate, Team, User
+from sutra_backend.config import Settings
+from sutra_backend.models import Agent, RoleTemplate, RuntimeLease, Team, User
 
 
 @dataclass(frozen=True)
@@ -20,13 +21,13 @@ class FakeIdentity:
     picture: str | None = None
 
 
-def build_client() -> tuple[TestClient, Session]:
+def build_client(settings: Settings | None = None) -> tuple[TestClient, Session]:
     database_file = NamedTemporaryFile(suffix=".db")
     engine = create_database_engine(f"sqlite:///{database_file.name}")
     SQLModel.metadata.create_all(engine)
     session = Session(engine)
 
-    app = create_app()
+    app = create_app(settings)
 
     def override_get_session() -> Session:
         return session
@@ -113,3 +114,37 @@ def test_auth_me_does_not_duplicate_bootstrap_records(monkeypatch) -> None:
     assert len(session.exec(select(User)).all()) == 1
     assert len(session.exec(select(Team)).all()) == 1
     assert len(session.exec(select(Agent)).all()) == 1
+
+
+def test_auth_me_bootstraps_default_agent_runtime_when_configured(monkeypatch) -> None:
+    client, session = build_client(
+        Settings(
+            app_env="test",
+            database_url="sqlite://",
+            runtime_provider="static_dev",
+            dev_runtime_base_url="http://runtime.internal",
+            dev_runtime_api_key="runtime-key",
+        )
+    )
+
+    monkeypatch.setattr(
+        auth_dependencies,
+        "verify_firebase_token",
+        lambda _: FakeIdentity(
+            uid="firebase-user-1",
+            email="user@example.com",
+            name="Sutra User",
+            picture="https://example.com/avatar.png",
+        ),
+    )
+
+    response = client.get(
+        "/api/auth/me",
+        headers={"Authorization": "Bearer valid-token"},
+    )
+
+    assert response.status_code == 200
+    agent = session.exec(select(Agent)).one()
+    lease = session.exec(select(RuntimeLease).where(RuntimeLease.agent_id == agent.id)).one()
+    assert agent.status == "ready"
+    assert lease.api_base_url == "http://runtime.internal"

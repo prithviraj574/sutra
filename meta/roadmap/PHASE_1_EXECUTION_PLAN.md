@@ -2,7 +2,7 @@
 
 Status: Approved and in execution  
 Execution State: Milestone 1 in progress  
-Last Updated: 2026-03-28  
+Last Updated: 2026-03-30  
 Primary Reference: [`meta/PRD/phase_1_managed_hermes_wrapper.md`](/Users/prithviraj/Desktop/Misc/sutra/meta/PRD/phase_1_managed_hermes_wrapper.md)
 
 ## Current Progress
@@ -12,7 +12,7 @@ Execution mode for this plan:
 - execute consecutive tasks continuously without waiting for review between normal implementation slices
 - use checkpoints only for verification, not as pause points
 - stop only for true blockers, destructive-risk decisions, or hidden-cost choices that materially change scope
-- prefer the next smallest verified slice over batching many unverified changes
+- batch coherent multi-file milestones when the path is clear, then verify them aggressively before moving on
 
 Completed in the first execution pass:
 
@@ -32,16 +32,62 @@ Completed in the first execution pass:
 - authenticated conversation read APIs added for agent conversation lists and persisted message history
 - encrypted secret vault APIs added for owned secret create/list/delete flows
 - owned secrets can now be decrypted server-side and injected into agent runs as transient runtime env
+- GitHub connection groundwork exists, but Phase 1 still needs a complete user-owned code path from connected account to repo commit
+- backend env example now documents required GitHub OAuth/App variables and frontend Hub exposes GitHub connection state plus connect redirect
 - React + TypeScript frontend scaffold added with Firebase auth handoff, Hub, and Chat Canvas shell
 - frontend verification is working with `npm test` and `npm run build`
 - Secret Vault UI added to the React app and wired to backend APIs
 - runtime env policy added to keep request-time secrets out of persisted VM-readable env files
-- `gcp_firecracker` runtime provisioning now creates per-agent Compute Engine leases with isolated GCS-backed Hermes home and private volume paths while keeping `static_dev` as fallback
+- managed runtime work is still in lease-scaffolding stage; real Firecracker lifecycle, runtime health reconciliation, and persistent volume behavior are not complete yet
+- role templates are now exposed through the backend and the web app can create a real multi-agent team with distinct roles
+- shared team workspace visibility now exists as a first product surface through team workspace APIs and Hub previews
+- teams can now run a coordinated multi-agent response that writes a shared summary into the team workspace
+- a first GitHub-owned output path now exists: workspace text can be exported into a connected GitHub repository through the backend
 - runtime bootstrap correctness tightened: default agents now seed in `provisioning`, runtime lease metadata now uses formal SQL naming conventions, and running leases stamp `started_at` consistently across providers
+- teams can now run a dedicated huddle that writes a shared plan into the workspace and creates explicit owned per-agent tasks
+- normal team execution now consumes open task assignments so agents act on aligned work instead of only a shared top-level prompt
+- agents now have a first inbox surface through assigned team tasks, and team execution claims tasks with a lease before running them
+- task coordination now has a basic audit trail: tasks can be delegated, can accumulate report-back updates, and record completion updates for later review in the UI
+- the inbox now supports pull-based work pickup: an agent can claim its next assigned task from the queue and complete it through the task action APIs instead of only waiting for control-plane orchestration
+- the runtime path can now execute inbox work directly: an agent can run its next task through Hermes, write completion updates, and return a task-scoped result without a separate team-run wrapper
+- the backend now has a scheduler-style inbox cycle primitive: one cycle can sweep a team and run the next claimable task for each agent through Hermes, which is the foundation for a future persistent background poller
+- the backend API surface has been refactored out of the monolithic `backend/sutra_backend/api/routes.py` file into domain-specific routers, which should keep the next Phase 1 slices from collapsing back into one oversized module
+- an opt-in background inbox poller now exists at app startup: when enabled, it periodically sweeps queued team work using the existing inbox cycle service
+- the background inbox poller is now Postgres-backed at the coordination layer: it uses a persisted lease row, bounded sweep capacity, and heartbeat/checkpoint metadata so only one control-plane instance should actively sweep at a time
+- poller status is now visible through a backend system route and a small Team Workspace scheduler card so users can tell whether queued team work should be moving automatically
+- expired claimed tasks are now reopened automatically when the team inbox is read or swept, which reduces the risk of a single failed run leaving team work stuck in a claimed state
+- runtime leases now return an explicit readiness summary instead of only raw lease fields, and the Team Workspace shows readiness for the selected agent runtime before users trigger inbox execution
+- the control plane now has a first runtime health-reconciliation pass: stale or degraded runtime leases are probed before being treated as request-ready, and unreachable runtimes are marked explicitly instead of silently trusting stale lease metadata
+- first sign-in now tries to provision the default agent runtime when the environment is configured for it, which moves the onboarding path closer to the actual Phase 1 zero-setup promise
+- the GitHub-owned output path is now more product-complete: exports return real file/commit destinations, team artifacts can be listed through the control plane, and the Team Workspace shows recent GitHub export history instead of treating export as a one-off backend action
+- team execution now consumes the structures we created for alignment: huddle plans, task updates, and recent shared-workspace context are fed back into team and inbox runs so agents act with the shared plan in view instead of only a narrow assignment string
+- inbox runtime execution now writes a durable task result back into the shared workspace and the Team Workspace UI follows that artifact automatically, which keeps the shared folder central to team coordination rather than a passive side panel
+- task-scoped team messaging now exists on top of the task-update model, so teammates can leave lightweight inter-agent notes on assigned work without replacing huddles and owned tasks as the main coordination structure
+- team responses now persist per-agent outputs into the shared workspace in addition to the rolled-up team summary, which makes the shared folder a truer working memory for later runs and exports
+- team response APIs now return the generated workspace files explicitly, and follow-up team runs prioritize recent task outputs from the same team context so durable workspace artifacts feed the next run more intentionally
+- the single-agent chat surface now prioritizes the current conversation’s generated workspace files and keeps export defaults aligned with the selected output, which makes the ownership path clearer from chat instead of only from the team workspace
+- Hermes session continuity is now more explicit in the control plane: single-agent, team, huddle, and inbox runs send stable conversation keys to Hermes `/v1/responses` instead of relying only on ad hoc request chaining, so backend-driven conversations are less stateless than before
+- the GCP runtime path now defines an explicit persistent agent-state contract: each agent gets a deterministic state disk, mount paths for `HERMES_HOME` and private volume, and startup-script metadata that mounts persistent storage without writing secrets into runtime-readable env files
+- the GCP runtime startup contract now goes one step further: provisioning metadata includes a concrete host bootstrap flow that mounts the persistent state disk, sets `HERMES_HOME` on the mounted filesystem, enables the Hermes API server, and launches `gateway.run` as a managed system service instead of leaving VM boot behavior implicit
+- local runtime provisioning can now authenticate to GCP with the checked-in service account file instead of requiring only metadata-server auth or a manually pasted access token, which makes local control-plane-to-GCP testing realistic
+- Compute Engine API has been enabled in the current GCP project and a pinned Hermes runtime source bundle has been uploaded to GCS for host bootstrap, so the next infra step can move from cloud-prep into actual tiny-host provisioning
 
 Next on the critical path:
 
-- add runtime bootstrap/health reconciliation so newly provisioned managed agents become request-ready automatically
+- keep tightening the core Phase 1 loop: onboarding -> agent chat -> persisted history -> GitHub-owned output
+- fix user-facing flow gaps before adding new surface area
+- keep making the GitHub-owned output loop feel complete from the web app, especially for single-agent flows and clearer end-to-end demos
+- deepen inter-agent coordination beyond sequential orchestration so teams can delegate and converge more naturally
+- extend the inbox model beyond user-driven task actions so agents can actively pick up, delegate, and report on tasks without the control plane simulating every step
+- tighten how shared workspace artifacts feed subsequent agent runs so the team folder behaves more like durable working memory than only a file browser
+- move from on-demand inbox execution endpoints toward a persistent background poller or scheduler per agent runtime
+- keep the backend poller as the Phase 1 scheduler of record, but continue hardening it with better stuck-task recovery and readiness telemetry before deciding whether to move it into a dedicated worker
+- complete runtime bootstrap and stronger runtime health reconciliation so newly provisioned managed agents become request-ready automatically without relying only on lease metadata
+- push the runtime reconciliation path beyond HTTP reachability into real managed-runtime readiness once the GCP/Firecracker host layer exists
+- turn the new persistent state-disk and mount contract into a fully live hosted runtime path by actually bootstrapping Hermes on that mounted filesystem and proving memory survives restart
+- exercise the new host bootstrap on a real low-capacity GCP runtime instance, then verify that a restarted agent still preserves Hermes-side response chain state and filesystem contents
+- keep the first real runtime host judicious: one tiny dev instance, explicit cleanup path, and only enough uptime to prove mounted-state and Hermes-session persistence
+- deepen agent-to-agent coordination from task context into cleaner inter-agent messaging semantics, but keep huddles plus owned tasks as the primary control structure
 
 ## Purpose
 
@@ -70,13 +116,15 @@ By the end of Phase 1, Sutra should support:
 
 - Google sign-in with automatic default-agent provisioning
 - a web-first experience for chatting with a single persistent agent or a persistent team
+- a team huddle step that aligns roles and writes an explicit shared plan before deeper execution
 - one Firecracker microVM per persistent agent
 - one private `HERMES_HOME` and persistent volume per agent
 - a shared team workspace mounted across team agents
 - full web-relevant Hermes power by default
 - GitHub ownership of generated code
 - encrypted secret vaulting with runtime env injection
-- mobile-usable visibility into agent behavior, artifacts, and automations
+- mobile-usable visibility into agent behavior and shared outputs
+- explicit task assignment so each team agent can act on owned work, not just a shared top-level prompt
 
 ## Execution Principles
 

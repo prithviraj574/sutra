@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from fastapi import Request
 from pydantic import AliasChoices, Field
@@ -41,6 +42,10 @@ class Settings(BaseSettings):
     gcs_bucket_name: str | None = Field(
         default=None,
         validation_alias=AliasChoices("GCS_BUCKET_NAME"),
+    )
+    gcp_service_account_json: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GCP_SERVICE_ACCOUNT_JSON", "GCS_SERVICE_ACCOUNT_JSON"),
     )
     master_encryption_key: str | None = Field(
         default=None,
@@ -88,9 +93,21 @@ class Settings(BaseSettings):
         default=20,
         validation_alias=AliasChoices("GCP_RUNTIME_BOOT_DISK_SIZE_GB"),
     )
+    gcp_runtime_state_disk_size_gb: int = Field(
+        default=50,
+        validation_alias=AliasChoices("GCP_RUNTIME_STATE_DISK_SIZE_GB"),
+    )
+    gcp_runtime_state_disk_type: str = Field(
+        default="pd-balanced",
+        validation_alias=AliasChoices("GCP_RUNTIME_STATE_DISK_TYPE"),
+    )
     gcp_runtime_source_image: str | None = Field(
         default=None,
         validation_alias=AliasChoices("GCP_RUNTIME_SOURCE_IMAGE"),
+    )
+    gcp_runtime_source_image_family: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GCP_RUNTIME_SOURCE_IMAGE_FAMILY"),
     )
     gcp_runtime_source_image_project: str | None = Field(
         default=None,
@@ -112,9 +129,85 @@ class Settings(BaseSettings):
         default=8642,
         validation_alias=AliasChoices("GCP_RUNTIME_PORT"),
     )
+    gcp_runtime_state_mount_path: str = Field(
+        default="/mnt/sutra/state",
+        validation_alias=AliasChoices("GCP_RUNTIME_STATE_MOUNT_PATH"),
+    )
+    gcp_runtime_hermes_home_path: str = Field(
+        default="/mnt/sutra/state/hermes-home",
+        validation_alias=AliasChoices("GCP_RUNTIME_HERMES_HOME_PATH"),
+    )
+    gcp_runtime_private_volume_path: str = Field(
+        default="/mnt/sutra/state/private-volume",
+        validation_alias=AliasChoices("GCP_RUNTIME_PRIVATE_VOLUME_PATH"),
+    )
+    gcp_runtime_shared_workspace_path: str = Field(
+        default="/mnt/sutra/shared-workspace",
+        validation_alias=AliasChoices("GCP_RUNTIME_SHARED_WORKSPACE_PATH"),
+    )
+    gcp_runtime_api_bind_host: str = Field(
+        default="0.0.0.0",
+        validation_alias=AliasChoices("GCP_RUNTIME_API_BIND_HOST"),
+    )
+    gcp_runtime_hermes_workdir: str = Field(
+        default="/opt/hermes-agent",
+        validation_alias=AliasChoices("GCP_RUNTIME_HERMES_WORKDIR"),
+    )
+    gcp_runtime_python_venv_path: str = Field(
+        default="/opt/sutra-runtime-venv",
+        validation_alias=AliasChoices("GCP_RUNTIME_PYTHON_VENV_PATH"),
+    )
+    gcp_runtime_gateway_command: str = Field(
+        default="python -m gateway.run",
+        validation_alias=AliasChoices("GCP_RUNTIME_GATEWAY_COMMAND"),
+    )
+    gcp_runtime_hermes_bundle_uri: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GCP_RUNTIME_HERMES_BUNDLE_URI"),
+    )
     gcp_runtime_access_token: str | None = Field(
         default=None,
         validation_alias=AliasChoices("GCP_RUNTIME_ACCESS_TOKEN"),
+    )
+    github_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GITHUB_CLIENT_ID"),
+    )
+    github_client_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GITHUB_CLIENT_SECRET"),
+    )
+    github_app_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GITHUB_APP_ID"),
+    )
+    github_app_private_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GITHUB_APP_PRIVATE_KEY"),
+    )
+    frontend_url: str = Field(
+        default="http://localhost:5173",
+        validation_alias=AliasChoices("SUTRA_FRONTEND_URL", "FRONTEND_URL"),
+    )
+    inbox_poller_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SUTRA_INBOX_POLLER_ENABLED"),
+    )
+    inbox_poller_interval_seconds: int = Field(
+        default=30,
+        validation_alias=AliasChoices("SUTRA_INBOX_POLLER_INTERVAL_SECONDS"),
+    )
+    inbox_poller_lease_seconds: int = Field(
+        default=60,
+        validation_alias=AliasChoices("SUTRA_INBOX_POLLER_LEASE_SECONDS"),
+    )
+    inbox_poller_max_tasks_per_sweep: int = Field(
+        default=4,
+        validation_alias=AliasChoices("SUTRA_INBOX_POLLER_MAX_TASKS_PER_SWEEP"),
+    )
+    runtime_heartbeat_stale_seconds: int = Field(
+        default=300,
+        validation_alias=AliasChoices("SUTRA_RUNTIME_HEARTBEAT_STALE_SECONDS"),
     )
 
 
@@ -128,3 +221,6 @@ def get_app_settings(request: Request) -> Settings:
     if isinstance(settings, Settings):
         return settings
     return get_settings()
+
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]

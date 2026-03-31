@@ -146,6 +146,43 @@ class SharedWorkspaceItem(TimestampedUUIDModel, table=True):
     path: str = Field(nullable=False)
     kind: str = Field(default="file", index=True, nullable=False)
     size_bytes: int | None = Field(default=None)
+    content_text: str | None = Field(default=None)
+    conversation_id: UUID | None = Field(default=None, foreign_key="conversations.id", index=True)
+    agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
+
+
+class TeamTask(TimestampedUUIDModel, table=True):
+    __tablename__ = "team_tasks"
+
+    team_id: UUID = Field(foreign_key="teams.id", index=True, nullable=False)
+    conversation_id: UUID = Field(
+        foreign_key="conversations.id",
+        index=True,
+        nullable=False,
+    )
+    assigned_agent_id: UUID = Field(
+        foreign_key="agents.id",
+        index=True,
+        nullable=False,
+    )
+    title: str = Field(nullable=False)
+    instruction: str = Field(nullable=False)
+    status: str = Field(default="open", index=True, nullable=False)
+    source: str = Field(default="huddle", index=True, nullable=False)
+    claim_token: str | None = Field(default=None, index=True)
+    claimed_at: datetime | None = Field(default=None)
+    claim_expires_at: datetime | None = Field(default=None, index=True)
+    completed_at: datetime | None = Field(default=None)
+
+
+class TeamTaskUpdate(TimestampedUUIDModel, table=True):
+    __tablename__ = "team_task_updates"
+
+    task_id: UUID = Field(foreign_key="team_tasks.id", index=True, nullable=False)
+    team_id: UUID = Field(foreign_key="teams.id", index=True, nullable=False)
+    agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
+    event_type: str = Field(default="reported", index=True, nullable=False)
+    content: str = Field(nullable=False)
 
 
 class Secret(TimestampedUUIDModel, table=True):
@@ -203,3 +240,19 @@ class RuntimeLease(TimestampedUUIDModel, table=True):
     api_base_url: str | None = Field(default=None)
     last_heartbeat_at: datetime | None = Field(default=None)
     started_at: datetime | None = Field(default=None)
+
+
+class PollerLease(TimestampedUUIDModel, table=True):
+    __tablename__ = "poller_leases"
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_poller_leases_name"),
+    )
+
+    name: str = Field(nullable=False, index=True)
+    owner_id: str | None = Field(default=None, index=True)
+    state: str = Field(default="idle", index=True, nullable=False)
+    last_heartbeat_at: datetime | None = Field(default=None)
+    lease_expires_at: datetime | None = Field(default=None)
+    last_sweep_started_at: datetime | None = Field(default=None)
+    last_sweep_completed_at: datetime | None = Field(default=None)
+    last_executed_count: int = Field(default=0, nullable=False)

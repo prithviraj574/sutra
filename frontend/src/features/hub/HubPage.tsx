@@ -1,9 +1,11 @@
 import { FormEvent, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { useAuth } from "../auth/AuthProvider";
 import { useApiClient, useBackendSession } from "../auth/useSession";
+import { readFrontendEnv } from "../../lib/env";
+import { buildAgentChatHref } from "../chat/routes";
 
 function formatRelativeTime(dateString: string): string {
   const date = new Date(dateString);
@@ -25,15 +27,39 @@ export function HubPage() {
   const auth = useAuth();
   const api = useApiClient();
   const session = useBackendSession();
+  const frontendEnv = useMemo(() => readFrontendEnv(), []);
+  const [searchParams, setSearchParams] = useSearchParams();
   const teams = useQuery({
     queryKey: ["teams", session.data?.user.id],
     queryFn: () => api.listTeams(),
     enabled: !!session.data,
   });
+  const githubConnection = useQuery({
+    queryKey: ["github-connection", session.data?.user.id],
+    queryFn: () => api.readGitHubConnection(),
+    enabled: !!session.data,
+    retry: false,
+  });
   const agents = useQuery({
     queryKey: ["agents", session.data?.user.id],
     queryFn: () => api.listAgents(),
     enabled: !!session.data,
+  });
+  const workspaces = useQuery<Record<string, { path: string; kind: string }[]>>({
+    queryKey: ["team-workspaces", teams.data?.items.map((team) => team.id).join(",")],
+    queryFn: async () => {
+      const entries = await Promise.all(
+        (teams.data?.items ?? []).map(async (team) => {
+          const workspace = await api.readTeamWorkspace(team.id);
+          return [
+            team.id,
+            workspace.items.map((item) => ({ path: item.path, kind: item.kind })),
+          ] as const;
+        }),
+      );
+      return Object.fromEntries(entries);
+    },
+    enabled: !!teams.data?.items.length,
   });
   const [prompt, setPrompt] = useState("");
 
@@ -80,7 +106,15 @@ export function HubPage() {
       return;
     }
 
-    navigate(`/agents/${defaultAgent.id}?prompt=${encodeURIComponent(prompt.trim())}`);
+    navigate(
+      buildAgentChatHref(defaultAgent.id, {
+        prompt: prompt.trim(),
+      }),
+    );
+  }
+
+  function handleConnectGitHub() {
+    window.location.assign(`${frontendEnv.apiBaseUrl}/api/auth/github`);
   }
 
   if (auth.loading || session.isLoading) {
@@ -120,14 +154,35 @@ export function HubPage() {
     );
   }
 
+  const githubStatus = searchParams.get("github");
+  const teamCreated = searchParams.get("teamCreated");
+
   return (
     <main className="mx-auto min-h-screen max-w-4xl px-6 pb-24 pt-28">
+      {githubStatus === "connected" ? (
+        <div className="aura-border mb-8 rounded-lg bg-surface px-4 py-3 text-sm text-primary">
+          GitHub is connected. Sutra can now use your installation for repo-backed workflows.
+        </div>
+      ) : null}
+      {githubStatus === "error" ? (
+        <div className="mb-8 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-primary">
+          GitHub connection did not complete. Please try again.
+        </div>
+      ) : null}
+      {teamCreated === "1" ? (
+        <div className="aura-border mb-8 rounded-lg bg-surface px-4 py-3 text-sm text-primary">
+          Team created. Your new role-based workspace is ready.
+        </div>
+      ) : null}
       <header className="flex items-start justify-between gap-6">
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted">Hub</p>
           <h1 className="mt-4 text-5xl leading-tight">Start from a single prompt.</h1>
         </div>
         <div className="flex items-center gap-5">
+          <Link className="text-sm text-muted transition-colors hover:text-primary" to="/teams/new">
+            Create Team
+          </Link>
           <Link className="text-sm text-muted transition-colors hover:text-primary" to="/secrets">
             Secret Vault
           </Link>
@@ -154,18 +209,40 @@ export function HubPage() {
         <div className="mb-4 flex items-center justify-between">
           <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted">Workspace</p>
           {defaultAgent ? (
-            <Link className="text-sm text-muted transition-colors hover:text-primary" to={`/agents/${defaultAgent.id}`}>
-              Open default agent
-            </Link>
+              <Link className="text-sm text-muted transition-colors hover:text-primary" to={buildAgentChatHref(defaultAgent.id)}>
+                Open default agent
+              </Link>
           ) : null}
         </div>
 
         <div className="divide-y divide-border border-y border-border">
           {(teams.data?.items ?? []).map((team) => (
             <div className="flex min-h-16 items-center justify-between py-4" key={team.id}>
-              <div>
+              <div className="min-w-0 flex-1">
                 <p className="text-sm text-primary">{team.name}</p>
                 <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted">{team.mode}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {agents.data?.items
+                    .filter((agent) => agent.team_id === team.id)
+                    .map((agent) => (
+                      <span
+                        className="rounded border border-border px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-muted"
+                        key={agent.id}
+                      >
+                        {agent.role_name}
+                      </span>
+                    ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(workspaces.data?.[team.id] ?? []).slice(0, 3).map((item) => (
+                    <span className="text-xs text-muted" key={`${team.id}:${item.path}`}>
+                      {item.kind === "directory" ? `${item.path}/` : item.path}
+                    </span>
+                  ))}
+                  {(workspaces.data?.[team.id] ?? []).length === 0 ? (
+                    <span className="text-xs text-muted">Workspace is ready for shared outputs.</span>
+                  ) : null}
+                </div>
               </div>
               <div className="text-right">
                 <p className="text-xs text-muted">
@@ -176,9 +253,55 @@ export function HubPage() {
                     Runtime {runtime.data?.lease.state ?? "not provisioned"}
                   </p>
                 ) : null}
+                {team.mode === "team" ? (
+                  <Link
+                    className="mt-2 inline-block text-xs uppercase tracking-[0.18em] text-muted transition-colors hover:text-primary"
+                    to={`/teams/${team.id}`}
+                  >
+                    Open
+                  </Link>
+                ) : agents.data?.items.find((agent) => agent.team_id === team.id) ? (
+                  <Link
+                    className="mt-2 inline-block text-xs uppercase tracking-[0.18em] text-muted transition-colors hover:text-primary"
+                    to={buildAgentChatHref(
+                      agents.data!.items.find((agent) => agent.team_id === team.id)!.id,
+                    )}
+                  >
+                    Open
+                  </Link>
+                ) : null}
               </div>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="mt-16">
+        <div className="mb-4 flex items-center justify-between">
+          <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted">Connections</p>
+        </div>
+        <div className="aura-border rounded-lg bg-surface p-6">
+          <div className="flex items-start justify-between gap-6">
+            <div>
+              <p className="text-sm text-primary">GitHub</p>
+              {githubConnection.data?.connection ? (
+                <p className="mt-2 text-sm text-muted">
+                  Connected as {githubConnection.data.connection.account_login} ({githubConnection.data.connection.account_type})
+                </p>
+              ) : (
+                <p className="mt-2 max-w-xl text-sm text-muted">
+                  Connect GitHub so generated code can be committed into a repo you control.
+                </p>
+              )}
+            </div>
+            {githubConnection.data?.connection ? (
+              <span className="text-xs uppercase tracking-[0.18em] text-muted">Connected</span>
+            ) : (
+              <button className="btn-primary" type="button" onClick={handleConnectGitHub}>
+                Connect GitHub
+              </button>
+            )}
+          </div>
         </div>
       </section>
 
@@ -186,10 +309,7 @@ export function HubPage() {
         <section className="mt-16">
           <div className="mb-4 flex items-center justify-between">
             <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted">Recent Conversations</p>
-            <Link
-              className="text-sm text-muted transition-colors hover:text-primary"
-              to="/chat"
-            >
+            <Link className="text-sm text-muted transition-colors hover:text-primary" to={buildAgentChatHref(defaultAgent.id)}>
               New Chat
             </Link>
           </div>
@@ -197,7 +317,7 @@ export function HubPage() {
             {(conversations.data?.items ?? []).map((conv) => (
               <Link
                 className="flex min-h-14 items-center justify-between py-4 transition-colors hover:bg-surface/50"
-                to={`/chat?conversationId=${conv.id}`}
+                to={buildAgentChatHref(defaultAgent.id, { conversationId: conv.id })}
                 key={conv.id}
               >
                 <div className="flex-1 min-w-0">

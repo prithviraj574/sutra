@@ -42,3 +42,89 @@ class TeamListResponse(BaseModel):
 
 class AgentListResponse(BaseModel):
     items: list[AgentRead]
+
+
+class RoleTemplateRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    key: str
+    name: str
+    description: str | None = None
+    default_system_prompt: str
+    default_tool_profile: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class RoleTemplateListResponse(BaseModel):
+    items: list[RoleTemplateRead]
+
+
+class TeamAgentCreate(BaseModel):
+    role_template_key: str
+    name: str | None = None
+
+
+class TeamCreateRequest(BaseModel):
+    name: str
+    description: str | None = None
+    agents: list[TeamAgentCreate]
+
+
+class TeamCreateResponse(BaseModel):
+    team: TeamRead
+    agents: list[AgentRead]
+
+
+class SharedWorkspaceItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    team_id: UUID
+    path: str
+    kind: str
+    size_bytes: int | None = None
+    content_text: str | None = None
+    conversation_id: UUID | None = None
+    agent_id: UUID | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArtifactRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    team_id: UUID | None = None
+    conversation_id: UUID | None = None
+    agent_id: UUID | None = None
+    name: str
+    kind: str
+    uri: str
+    mime_type: str | None = None
+    preview_uri: str | None = None
+    github_repo: str | None = None
+    github_branch: str | None = None
+    github_sha: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TeamArtifactListResponse(BaseModel):
+    items: list[ArtifactRead]
+
+
+class TeamWorkspaceResponse(BaseModel):
+    team: TeamRead
+    items: list[SharedWorkspaceItemRead]
+
+
+class WorkspaceItemUpsertRequest(BaseModel):
+    path: str
+    kind: str = "file"
+    content_text: str | None = None
+
+
+class WorkspaceItemUpsertResponse(BaseModel):
+    item: SharedWorkspaceItemRead

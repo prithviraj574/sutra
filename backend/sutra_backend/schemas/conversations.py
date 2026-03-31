@@ -38,3 +38,7 @@ class ConversationListResponse(BaseModel):
 
 class MessageListResponse(BaseModel):
     items: list[MessageRead]
+
+
+class TeamConversationListResponse(BaseModel):
+    items: list[ConversationRead]

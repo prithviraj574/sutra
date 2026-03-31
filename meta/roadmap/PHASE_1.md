@@ -42,7 +42,9 @@ We are building a wrapper around the Hermes library rather than forking it. The 
 A user gets either a single agent or a coordinated team with defined roles.
 
 - **Roles:** each agent in the team has a role (e.g. Researcher, Executor, Planner, Domain Expert). Roles define the agent's system prompt, tools available, and scope of responsibility.
-- **Inter-agent chat:** agents can message each other to delegate, report back, or ask questions. This uses Hermes's existing multi-platform gateway adapted for internal A2A messaging.
+- **Team huddle first:** before a team starts execution on a meaningful goal, the system should support a short alignment round where the agents discuss the request, clarify approach, and agree on how work should be split.
+- **Explicit task assignment:** a huddle should produce owned tasks per role so each agent has a clear assignment instead of relying only on implicit prompt chaining.
+- **Inter-agent chat:** agents can message each other to delegate, report back, or ask questions. This uses Hermes's existing multi-platform gateway adapted for internal A2A messaging, but the MVP should anchor team coordination around huddles plus explicit assignments rather than free-form chatter alone.
 - **Shared team folder:** a common knowledge directory all agents in the team can read from and write to. This is where shared context, generated knowledge, and task artifacts live. Individual agent memory stays private to that agent.
 - Default team composition for MVP: a sensible starting set of 3–5 roles that cover most user goals without overwhelming them.
 
@@ -96,7 +98,8 @@ Hermes passes raw context to LLMs. This must be addressed before any users outsi
 
 - [ ] User can sign in and have an agent ready with zero manual setup
 - [ ] User can optionally create a team with distinct roles
-- [ ] Agents can communicate with each other and use the shared team folder
+- [ ] Teams can run a huddle that produces a shared plan and explicit per-agent task assignments
+- [ ] Agents can communicate with each other, act on assigned tasks, and use the shared team folder
 - [ ] No user secrets are passed raw to the LLM
 - [ ] Web UI is usable on mobile
 - [ ] GitHub integration working — generated code committed to user-owned repo
