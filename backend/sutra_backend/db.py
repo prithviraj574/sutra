@@ -9,7 +9,16 @@ from sqlmodel import Session, SQLModel, create_engine
 from sutra_backend.config import get_settings
 
 
+def normalize_database_url(database_url: str) -> str:
+    if database_url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + database_url.removeprefix("postgresql://")
+    if database_url.startswith("postgres://"):
+        return "postgresql+psycopg://" + database_url.removeprefix("postgres://")
+    return database_url
+
+
 def create_database_engine(database_url: str, *, echo: bool = False) -> Engine:
+    database_url = normalize_database_url(database_url)
     connect_args: dict[str, object] = {}
     engine_kwargs: dict[str, object] = {"echo": echo}
 

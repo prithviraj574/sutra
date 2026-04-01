@@ -4,12 +4,29 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BACKEND_ENV="$ROOT_DIR/backend/.env"
 
+load_env_file() {
+  local env_file="$1"
+  local line
+  local key
+  local value
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      ''|\#*)
+        continue
+        ;;
+    esac
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    export "$key=$value"
+  done < "$env_file"
+}
+
 cd "$ROOT_DIR"
 
 if [[ -f "$BACKEND_ENV" ]]; then
-  set -a
-  . "$BACKEND_ENV"
-  set +a
+  load_env_file "$BACKEND_ENV"
 fi
 
 PROJECT_ID="${GCP_PROJECT_ID:-project-3130b11c-429f-49aa-88e}"

@@ -7,6 +7,25 @@ BACKEND_DIR="$ROOT_DIR/backend"
 PYTHON_BIN="$BACKEND_DIR/.venv/bin/python"
 UVICORN_BIN="$BACKEND_DIR/.venv/bin/uvicorn"
 
+load_env_file() {
+  local env_file="$1"
+  local line
+  local key
+  local value
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      ''|\#*)
+        continue
+        ;;
+    esac
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    export "$key=$value"
+  done < "$env_file"
+}
+
 if [[ ! -f "$BACKEND_ENV" ]]; then
   echo "Missing backend env file: $BACKEND_ENV" >&2
   exit 1
@@ -18,16 +37,10 @@ if [[ ! -x "$PYTHON_BIN" || ! -x "$UVICORN_BIN" ]]; then
 fi
 
 cd "$ROOT_DIR"
-set -a
-. "$BACKEND_ENV"
-set +a
+load_env_file "$BACKEND_ENV"
 
-if [[ -z "${DATABASE_URL:-}" && -n "${POSTGRES_URL:-}" ]]; then
-  export DATABASE_URL="$POSTGRES_URL"
-fi
-
-if [[ -z "${DATABASE_URL:-}" ]]; then
-  echo "backend/.env must define DATABASE_URL or POSTGRES_URL" >&2
+if [[ -z "${POSTGRES_URL:-}" ]]; then
+  echo "backend/.env must define POSTGRES_URL" >&2
   exit 1
 fi
 
@@ -43,7 +56,7 @@ from sqlmodel import SQLModel
 from sutra_backend.db import create_database_engine
 from sutra_backend.models import *  # noqa: F401,F403
 
-engine = create_database_engine(os.environ["DATABASE_URL"])
+engine = create_database_engine(os.environ["POSTGRES_URL"])
 SQLModel.metadata.create_all(engine)
 PY
 

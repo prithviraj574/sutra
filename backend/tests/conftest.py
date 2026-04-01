@@ -72,7 +72,7 @@ def postgres_database_url() -> Generator[str, None, None]:
                 text=True,
                 timeout=30,
             )
-            yield f"postgresql+psycopg://postgres@127.0.0.1:{port}/sutra_test"
+            yield f"postgresql://postgres@127.0.0.1:{port}/sutra_test"
         finally:
             subprocess.run(
                 [pg_ctl, "-D", data_dir, "-w", "stop", "-m", "fast"],

@@ -28,8 +28,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("DEBUG", "FASTAPI_DEBUG"),
     )
     database_url: str = Field(
-        default="postgresql+psycopg://postgres@127.0.0.1:5432/sutra",
-        validation_alias=AliasChoices("DATABASE_URL", "POSTGRES_URL"),
+        default="postgresql://postgres@127.0.0.1:5432/sutra",
+        validation_alias=AliasChoices("POSTGRES_URL"),
     )
     firebase_project_id: str | None = Field(
         default=None,
