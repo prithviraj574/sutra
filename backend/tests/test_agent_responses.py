@@ -199,3 +199,27 @@ def test_agent_responses_route_refreshes_conversation_updated_at(monkeypatch) ->
     assert second_response.status_code == 200
     session.refresh(conversation)
     assert conversation.updated_at > stale_updated_at
+
+
+def test_agent_responses_route_requires_explicit_managed_runtime_provisioning(monkeypatch) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite://",
+        runtime_provider="gcp_firecracker",
+        runtime_api_key="runtime-key",
+    )
+    client, session = build_client(settings)
+    authenticate_default_user(client, monkeypatch)
+
+    agent = session.exec(select(Agent)).one()
+
+    response = client.post(
+        f"/api/agents/{agent.id}/responses",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"input": "Make a plan"},
+    )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Agent runtime is not provisioned yet. Provision the runtime before sending a prompt."
+    )

@@ -24,8 +24,8 @@ export function useBackendSession() {
   const api = useApiClient();
 
   return useQuery({
-    queryKey: ["backend-session", auth.user?.uid],
+    queryKey: ["backend-session", auth.user?.uid, auth.tokenVersion],
     queryFn: () => api.readSession(),
-    enabled: !!auth.user,
+    enabled: !!auth.user && !auth.loading,
   });
 }

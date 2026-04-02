@@ -7,6 +7,7 @@ export type FirebaseClientConfig = {
 
 export type FrontendEnv = {
   apiBaseUrl: string;
+  authMode: "firebase" | "dev_bypass";
   firebaseConfig: FirebaseClientConfig | null;
 };
 
@@ -23,9 +24,11 @@ export function readFrontendEnv(): FrontendEnv {
   };
 
   const isFirebaseConfigured = Object.values(firebaseConfig).every(Boolean);
+  const authMode = import.meta.env.VITE_AUTH_MODE === "dev_bypass" ? "dev_bypass" : "firebase";
 
   return {
-    apiBaseUrl: import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000",
-    firebaseConfig: isFirebaseConfigured ? firebaseConfig : null,
+    apiBaseUrl: import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8001",
+    authMode,
+    firebaseConfig: authMode === "firebase" && isFirebaseConfigured ? firebaseConfig : null,
   };
 }

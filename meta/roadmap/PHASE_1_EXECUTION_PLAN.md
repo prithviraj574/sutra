@@ -102,6 +102,7 @@ Next on the critical path:
 - complete runtime bootstrap and stronger runtime health reconciliation so newly provisioned managed agents become request-ready automatically without relying only on lease metadata
 - push the runtime reconciliation path beyond HTTP reachability into real managed-runtime readiness once the GCP/Firecracker host layer exists
 - turn the new persistent state-disk and mount contract into a fully live hosted runtime path by actually bootstrapping Hermes on that mounted filesystem and proving memory survives restart
+- wire optional Honcho memory through the managed runtime path with a per-user workspace (`sutra:prod:user:{user_id}`), a shared user peer, and a distinct agent peer per runtime so personalization spans a user’s agents without weakening private per-agent Hermes state
 - exercise the new host bootstrap on a real low-capacity GCP runtime instance, then verify that a restarted agent still preserves Hermes-side response chain state and filesystem contents
 - keep the first real runtime host judicious: one tiny dev instance, explicit cleanup path, and only enough uptime to prove mounted-state and Hermes-session persistence
 - deepen agent-to-agent coordination from task context into cleaner inter-agent messaging semantics, but keep huddles plus owned tasks as the primary control structure

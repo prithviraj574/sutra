@@ -936,6 +936,35 @@ def _complete_task_claim(
     return task
 
 
+def _release_task_claim(
+    session: Session,
+    *,
+    task: TeamTask,
+    claim_token: str,
+    reason: str,
+) -> TeamTask:
+    if task.claim_token != claim_token or task.status != "claimed":
+        return task
+
+    now = utcnow()
+    task.status = "open"
+    task.claim_token = None
+    task.claimed_at = None
+    task.claim_expires_at = None
+    task.updated_at = now
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+    _append_task_update(
+        session,
+        task=task,
+        event_type="released",
+        content=reason,
+        agent_id=task.assigned_agent_id,
+    )
+    return task
+
+
 def delegate_task(
     session: Session,
     *,
@@ -1147,28 +1176,37 @@ async def run_next_agent_inbox_task(
     )
     session.commit()
 
-    runtime_response = await runtime_client.create_response(
-        ResponsesRequest(
-            input=_build_agent_inbox_task_input(
-                team=team,
-                task=task,
-                updates=updates,
-                update_agents=update_agents,
-                huddle_plan_text=huddle_plan.content_text if huddle_plan is not None else None,
-                workspace_items=workspace_items,
-            ),
-            instructions=_build_agent_inbox_instructions(
-                team=team,
-                role_template=role_template,
-            ),
-            conversation=_build_team_runtime_conversation_name(
-                mode="agent_task",
-                conversation=conversation,
-                agent=agent,
-                task=task,
-            ),
+    try:
+        runtime_response = await runtime_client.create_response(
+            ResponsesRequest(
+                input=_build_agent_inbox_task_input(
+                    team=team,
+                    task=task,
+                    updates=updates,
+                    update_agents=update_agents,
+                    huddle_plan_text=huddle_plan.content_text if huddle_plan is not None else None,
+                    workspace_items=workspace_items,
+                ),
+                instructions=_build_agent_inbox_instructions(
+                    team=team,
+                    role_template=role_template,
+                ),
+                conversation=_build_team_runtime_conversation_name(
+                    mode="agent_task",
+                    conversation=conversation,
+                    agent=agent,
+                    task=task,
+                ),
+            )
         )
-    )
+    except Exception:
+        _release_task_claim(
+            session,
+            task=task,
+            claim_token=task.claim_token or "",
+            reason="Inbox execution failed before completion; the task returned to the queue.",
+        )
+        raise
 
     session.add(
         Message(
@@ -1478,111 +1516,123 @@ async def run_team_response(
 
     outputs: list[TeamMemberResponse] = []
     generated_items: list[SharedWorkspaceItem] = []
-    for agent in agents:
-        ensure_agent_runtime_lease(session, agent=agent, settings=settings)
-        lease_status = reconcile_runtime_lease(
-            session,
-            user=user,
-            agent_id=agent.id,
-            settings=settings,
-        )
-        if not lease_status.ready:
-            raise RuntimeNotReadyError(lease_status.readiness_reason)
-        runtime_client = HermesRuntimeClient(
-            target=build_runtime_target(lease=lease_status.lease, settings=settings),
-            timeout_seconds=settings.hermes_api_route_timeout_seconds,
-        )
-        role_template = templates_by_id.get(agent.role_template_id)
-        assigned_task = tasks_by_agent.get(agent.id)
-        if assigned_task is not None:
-            assigned_task = _claim_task_for_execution(
+    claimed_tasks: list[TeamTask] = []
+    try:
+        for agent in agents:
+            ensure_agent_runtime_lease(session, agent=agent, settings=settings)
+            lease_status = reconcile_runtime_lease(
                 session,
-                task=assigned_task,
-                claim_token=run_claim_token,
+                user=user,
+                agent_id=agent.id,
+                settings=settings,
             )
-        huddle_plan = _load_huddle_plan_item(
-            session,
-            team=team,
-            conversation_id=assigned_task.conversation_id if assigned_task is not None else None,
-        )
-        workspace_items = _load_recent_workspace_context(
-            session,
-            team=team,
-            exclude_paths={huddle_plan.path} if huddle_plan is not None else None,
-            preferred_prefixes=_load_conversation_workspace_prefixes(
-                session,
-                team=team,
-                conversation=conversation,
-            ),
-        )
-        runtime_response = await runtime_client.create_response(
-            ResponsesRequest(
-                input=_build_agent_team_input(
-                    team=team,
-                    user_input=user_input,
-                    prior_outputs=outputs,
-                    assigned_task=assigned_task,
-                    huddle_plan_text=huddle_plan.content_text if huddle_plan is not None else None,
-                    workspace_items=workspace_items,
-                ),
-                instructions=_build_agent_instructions(
-                    team=team,
-                    role_template=role_template,
-                    override=instructions,
-                ),
-                conversation=_build_team_runtime_conversation_name(
-                    mode="team",
-                    conversation=conversation,
-                    agent=agent,
+            if not lease_status.ready:
+                raise RuntimeNotReadyError(lease_status.readiness_reason)
+            runtime_client = HermesRuntimeClient(
+                target=build_runtime_target(lease=lease_status.lease, settings=settings),
+                timeout_seconds=settings.hermes_api_route_timeout_seconds,
+            )
+            role_template = templates_by_id.get(agent.role_template_id)
+            assigned_task = tasks_by_agent.get(agent.id)
+            if assigned_task is not None:
+                assigned_task = _claim_task_for_execution(
+                    session,
                     task=assigned_task,
-                ),
-            ),
-            request_env=request_env or None,
-        )
-        outputs.append(
-            TeamMemberResponse(
-                agent=agent,
-                response_id=runtime_response.response_id,
-                output_text=runtime_response.output_text,
-            )
-        )
-        session.add(
-            Message(
-                conversation_id=conversation.id,
-                actor_type="assistant",
-                actor_id=agent.id,
-                content=runtime_response.output_text,
-                response_chain_id=runtime_response.response_id,
-            )
-        )
-        output_item = upsert_workspace_item(
-            session,
-            user=user,
-            team_id=team.id,
-            path=_workspace_task_output_path(assigned_task.id)
-            if assigned_task is not None
-            else _workspace_team_agent_output_path(conversation.id, agent=agent),
-            kind="file",
-            content_text=_build_workspace_team_agent_output(
-                team=team,
-                agent=agent,
-                user_input=user_input,
-                assigned_task=assigned_task,
-                output_text=runtime_response.output_text,
-            ),
-            conversation_id=conversation.id,
-            agent_id=agent.id,
-        )
-        generated_items.append(output_item)
-        if assigned_task is not None:
-            _complete_task_claim(
+                    claim_token=run_claim_token,
+                )
+                claimed_tasks.append(assigned_task)
+            huddle_plan = _load_huddle_plan_item(
                 session,
-                task=assigned_task,
-                claim_token=run_claim_token,
-                completion_content=runtime_response.output_text,
+                team=team,
+                conversation_id=assigned_task.conversation_id if assigned_task is not None else None,
             )
-        else:
-            session.commit()
+            workspace_items = _load_recent_workspace_context(
+                session,
+                team=team,
+                exclude_paths={huddle_plan.path} if huddle_plan is not None else None,
+                preferred_prefixes=_load_conversation_workspace_prefixes(
+                    session,
+                    team=team,
+                    conversation=conversation,
+                ),
+            )
+            runtime_response = await runtime_client.create_response(
+                ResponsesRequest(
+                    input=_build_agent_team_input(
+                        team=team,
+                        user_input=user_input,
+                        prior_outputs=outputs,
+                        assigned_task=assigned_task,
+                        huddle_plan_text=huddle_plan.content_text if huddle_plan is not None else None,
+                        workspace_items=workspace_items,
+                    ),
+                    instructions=_build_agent_instructions(
+                        team=team,
+                        role_template=role_template,
+                        override=instructions,
+                    ),
+                    conversation=_build_team_runtime_conversation_name(
+                        mode="team",
+                        conversation=conversation,
+                        agent=agent,
+                        task=assigned_task,
+                    ),
+                ),
+                request_env=request_env or None,
+            )
+            outputs.append(
+                TeamMemberResponse(
+                    agent=agent,
+                    response_id=runtime_response.response_id,
+                    output_text=runtime_response.output_text,
+                )
+            )
+            session.add(
+                Message(
+                    conversation_id=conversation.id,
+                    actor_type="assistant",
+                    actor_id=agent.id,
+                    content=runtime_response.output_text,
+                    response_chain_id=runtime_response.response_id,
+                )
+            )
+            output_item = upsert_workspace_item(
+                session,
+                user=user,
+                team_id=team.id,
+                path=_workspace_task_output_path(assigned_task.id)
+                if assigned_task is not None
+                else _workspace_team_agent_output_path(conversation.id, agent=agent),
+                kind="file",
+                content_text=_build_workspace_team_agent_output(
+                    team=team,
+                    agent=agent,
+                    user_input=user_input,
+                    assigned_task=assigned_task,
+                    output_text=runtime_response.output_text,
+                ),
+                conversation_id=conversation.id,
+                agent_id=agent.id,
+            )
+            generated_items.append(output_item)
+            if assigned_task is not None:
+                _complete_task_claim(
+                    session,
+                    task=assigned_task,
+                    claim_token=run_claim_token,
+                    completion_content=runtime_response.output_text,
+                )
+            else:
+                session.commit()
+    except Exception:
+        for claimed_task in claimed_tasks:
+            _release_task_claim(
+                session,
+                task=claimed_task,
+                claim_token=run_claim_token,
+                reason="Team execution failed before completion; the task returned to the queue.",
+            )
+        raise
 
     summary_item = upsert_workspace_item(
         session,

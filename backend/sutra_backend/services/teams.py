@@ -5,7 +5,10 @@ from uuid import UUID
 
 from sqlmodel import Session, select
 
+from sutra_backend.config import Settings
 from sutra_backend.models import Agent, Artifact, RoleTemplate, SharedWorkspaceItem, Team, User, utcnow
+from sutra_backend.runtime.errors import RuntimeNotReadyError
+from sutra_backend.runtime.provisioning import ensure_agent_runtime_lease
 from sutra_backend.services.bootstrap import ensure_role_templates
 
 
@@ -49,6 +52,7 @@ def create_team_with_agents(
     name: str,
     description: str | None,
     agents: list[TeamCreationSpec],
+    settings: Settings | None = None,
 ) -> TeamCreationResult:
     ensure_role_templates(session)
 
@@ -126,6 +130,11 @@ def create_team_with_agents(
     session.refresh(team)
     for agent in created_agents:
         session.refresh(agent)
+        if settings is not None:
+            try:
+                ensure_agent_runtime_lease(session, agent=agent, settings=settings)
+            except RuntimeNotReadyError:
+                session.refresh(agent)
 
     return TeamCreationResult(team=team, agents=created_agents)
 

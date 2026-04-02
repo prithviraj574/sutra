@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { Agent, Artifact, AutomationJob, SharedWorkspaceItem, Team } from "../../lib/api";
 import { useApiClient, useBackendSession } from "../auth/useSession";
+import { parseApiDate } from "../../lib/dates";
 
 function TeamWorkspaceInner({ teamId }: { teamId: string }) {
   const api = useApiClient();
@@ -27,6 +28,17 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
   const [jobName, setJobName] = useState("");
   const [jobSchedule, setJobSchedule] = useState("0 9 * * 1");
   const [jobPrompt, setJobPrompt] = useState("");
+
+  function refreshTeamWorkspaceState() {
+    void queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] });
+    void queryClient.invalidateQueries({ queryKey: ["team-conversations", teamId] });
+    void queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] });
+  }
+
+  function refreshTaskState() {
+    void queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] });
+    void queryClient.invalidateQueries({ queryKey: ["task-updates"] });
+  }
 
   const teams = useQuery({
     queryKey: ["teams", session.data?.user.id],
@@ -94,8 +106,8 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
   });
   const provisionRuntime = useMutation({
     mutationFn: () => api.provisionAgentRuntime(pickupAgentId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
     },
   });
   const githubRepositories = useQuery({
@@ -111,14 +123,14 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
   });
   const verifyRuntime = useMutation({
     mutationFn: () => api.verifyAgentRuntime(pickupAgentId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
     },
   });
   const restartRuntime = useMutation({
     mutationFn: () => api.restartAgentRuntime(pickupAgentId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
     },
   });
 
@@ -268,15 +280,11 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         input: draft.trim(),
         secret_ids: selectedSecretIds,
       }),
-    onSuccess: async (payload) => {
+    onSuccess: (payload) => {
       setDraft("");
       setLatestGeneratedItemIds([]);
       setSelectedItemId(payload.workspace_item_id ?? undefined);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-conversations", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-      ]);
+      refreshTeamWorkspaceState();
     },
   });
 
@@ -287,16 +295,12 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         conversation_id: teamConversations.data?.items[0]?.id,
         secret_ids: selectedSecretIds,
       }),
-    onSuccess: async (payload) => {
+    onSuccess: (payload) => {
       setDraft("");
       const generatedIds = payload.generated_items.map((item) => item.id);
       setLatestGeneratedItemIds(generatedIds);
       setSelectedItemId(generatedIds[0] ?? payload.workspace_item_id ?? undefined);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-conversations", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-      ]);
+      refreshTeamWorkspaceState();
     },
   });
 
@@ -307,8 +311,8 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         path: exportPath.trim(),
         commit_message: commitMessage.trim(),
       }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["team-artifacts", teamId] });
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["team-artifacts", teamId] });
     },
   });
 
@@ -318,12 +322,9 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         assigned_agent_id: delegateTargetAgentId,
         note: delegateNote.trim() || undefined,
       }),
-    onSuccess: async () => {
+    onSuccess: () => {
       setDelegateNote("");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-      ]);
+      refreshTaskState();
     },
   });
 
@@ -333,31 +334,25 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         agent_id: messageAgentId || undefined,
         content: messageNote.trim(),
       }),
-    onSuccess: async () => {
+    onSuccess: () => {
       setMessageNote("");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-      ]);
+      refreshTaskState();
     },
   });
 
   const pickupNextTask = useMutation({
     mutationFn: () => api.claimNextInboxTask(pickupAgentId),
-    onSuccess: async (payload) => {
+    onSuccess: (payload) => {
       if (payload.task) {
         setSelectedTaskId(payload.task.id);
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-      ]);
+      refreshTaskState();
     },
   });
 
   const runNextInboxTask = useMutation({
     mutationFn: () => api.runNextInboxTask(pickupAgentId),
-    onSuccess: async (payload) => {
+    onSuccess: (payload) => {
       if (payload.task) {
         setSelectedTaskId(payload.task.id);
       }
@@ -365,17 +360,14 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         setLatestGeneratedItemIds([payload.workspace_item_id]);
         setSelectedItemId(payload.workspace_item_id);
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
-      ]);
+      refreshTaskState();
+      void queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] });
     },
   });
 
   const runInboxCycle = useMutation({
     mutationFn: () => api.runTeamInboxCycle(teamId),
-    onSuccess: async (payload) => {
+    onSuccess: (payload) => {
       const firstTaskId = payload.results.find((item) => item.task?.id)?.task?.id;
       const workspaceItemIds = payload.results
         .map((item) => item.workspace_item_id)
@@ -388,11 +380,8 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         setLatestGeneratedItemIds(workspaceItemIds);
         setSelectedItemId(firstWorkspaceItemId);
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
-      ]);
+      refreshTaskState();
+      void queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] });
     },
   });
 
@@ -403,12 +392,9 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         claim_token: selectedTask?.claim_token ?? undefined,
         content: completionNote.trim(),
       }),
-    onSuccess: async () => {
+    onSuccess: () => {
       setCompletionNote("");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-      ]);
+      refreshTaskState();
     },
   });
   const createAutomationJob = useMutation({
@@ -419,22 +405,22 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         schedule: jobSchedule.trim(),
         prompt: jobPrompt.trim(),
       }),
-    onSuccess: async () => {
+    onSuccess: () => {
       setJobName("");
       setJobPrompt("");
-      await queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
+      void queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
     },
   });
   const updateAutomationJob = useMutation({
     mutationFn: ({ jobId, enabled }: { jobId: string; enabled: boolean }) =>
       api.updateAutomationJob(jobId, { enabled }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
     },
   });
   const runAutomationJob = useMutation({
     mutationFn: (jobId: string) => api.runAutomationJob(jobId),
-    onSuccess: async (payload) => {
+    onSuccess: (payload) => {
       if (payload.workspace_item_id) {
         setLatestGeneratedItemIds((current) =>
           current.includes(payload.workspace_item_id!)
@@ -443,12 +429,8 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         );
         setSelectedItemId(payload.workspace_item_id);
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-conversations", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-      ]);
+      void queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
+      refreshTeamWorkspaceState();
     },
   });
 
@@ -653,7 +635,7 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
                   <p className="text-xs uppercase tracking-[0.18em] text-muted">Last Sweep</p>
                   <p className="mt-2 text-sm text-text">
                     {pollerStatus.data.lease.last_sweep_completed_at
-                      ? new Date(pollerStatus.data.lease.last_sweep_completed_at).toLocaleString()
+                      ? parseApiDate(pollerStatus.data.lease.last_sweep_completed_at).toLocaleString()
                       : "No completed sweep yet"}
                   </p>
                 </div>
@@ -720,7 +702,7 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
                       </p>
                       <p className="mt-3 text-sm leading-7 text-text">{job.prompt}</p>
                       <p className="mt-2 text-xs text-muted">
-                        Last run {job.last_run_at ? new Date(job.last_run_at).toLocaleString() : "not yet run"}
+                        Last run {job.last_run_at ? parseApiDate(job.last_run_at).toLocaleString() : "not yet run"}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -937,12 +919,12 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
                       </p>
                       {task.claim_expires_at ? (
                         <p className="mt-2 text-xs text-muted">
-                          Lease active until {new Date(task.claim_expires_at).toLocaleTimeString()}.
+                          Lease active until {parseApiDate(task.claim_expires_at).toLocaleTimeString()}.
                         </p>
                       ) : null}
                       {task.completed_at ? (
                         <p className="mt-2 text-xs text-muted">
-                          Completed at {new Date(task.completed_at).toLocaleTimeString()}.
+                          Completed at {parseApiDate(task.completed_at).toLocaleTimeString()}.
                         </p>
                       ) : null}
                     </div>

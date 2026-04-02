@@ -5,7 +5,8 @@ import { readFrontendEnv } from "./env";
 
 const env = readFrontendEnv();
 
-export const firebaseEnabled = env.firebaseConfig !== null;
+export const frontendAuthMode = env.authMode;
+export const firebaseEnabled = env.authMode === "firebase" && env.firebaseConfig !== null;
 
 export const firebaseApp = env.firebaseConfig ? initializeApp(env.firebaseConfig) : null;
 export const firebaseAuth = firebaseApp ? getAuth(firebaseApp) : null;

@@ -22,7 +22,11 @@ from sutra_backend.runtime.firecracker_host import (
     build_agent_private_volume_path,
     build_team_shared_workspace_path,
 )
-from sutra_backend.runtime.provisioning import ensure_agent_runtime_lease, restart_agent_runtime_lease
+from sutra_backend.runtime.provisioning import (
+    ensure_agent_runtime_lease,
+    restart_agent_runtime_lease,
+    sync_runtime_lease_with_settings,
+)
 
 
 @dataclass(frozen=True)
@@ -186,6 +190,28 @@ def summarize_runtime_lease(
     )
 
 
+def summarize_unprovisioned_runtime(
+    *,
+    agent: Agent,
+    session: Session,
+    settings: Settings,
+) -> RuntimeLeaseStatus:
+    placeholder_lease = RuntimeLease(
+        agent_id=agent.id,
+        vm_id=f"pending-{str(agent.id)[:8]}",
+        state="provisioning",
+        api_base_url=None,
+    )
+    return summarize_runtime_lease(
+        agent=agent,
+        session=session,
+        lease=placeholder_lease,
+        settings=settings,
+        readiness_stage="not_provisioned",
+        health_detail="Runtime has not been provisioned yet.",
+    )
+
+
 def reconcile_runtime_lease(
     session: Session,
     *,
@@ -199,7 +225,17 @@ def reconcile_runtime_lease(
     agent = get_owned_agent(session, agent_id=agent_id, user=user)
     lease = session.exec(select(RuntimeLease).where(RuntimeLease.agent_id == agent.id)).first()
     if lease is None:
-        raise AgentNotFoundError("Runtime lease not found.")
+        return summarize_unprovisioned_runtime(agent=agent, session=session, settings=settings)
+    lease_provider = "static_dev" if lease.vm_id.startswith("local-dev-") else "gcp_firecracker"
+    if lease_provider != settings.runtime_provider:
+        if settings.runtime_provider == "static_dev" and settings.dev_runtime_base_url:
+            lease = ensure_agent_runtime_lease(session, agent=agent, settings=settings)
+        else:
+            return summarize_unprovisioned_runtime(agent=agent, session=session, settings=settings)
+    if sync_runtime_lease_with_settings(lease=lease, settings=settings):
+        session.add(lease)
+        session.commit()
+        session.refresh(lease)
 
     current = summarize_runtime_lease(
         agent=agent,

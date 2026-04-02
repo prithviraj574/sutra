@@ -78,6 +78,7 @@ def create_team(
     payload: TeamCreateRequest,
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
+    settings: Settings = Depends(get_app_settings),
 ) -> TeamCreateResponse:
     try:
         result = create_team_with_agents(
@@ -92,6 +93,7 @@ def create_team(
                 )
                 for agent in payload.agents
             ],
+            settings=settings,
         )
     except TeamServiceError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

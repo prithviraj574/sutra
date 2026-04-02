@@ -5,10 +5,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../auth/AuthProvider";
 import { useApiClient, useBackendSession } from "../auth/useSession";
 import { readFrontendEnv } from "../../lib/env";
+import { parseApiDate } from "../../lib/dates";
 import { buildAgentChatHref } from "../chat/routes";
+import { pickDefaultAgent } from "./defaultAgent";
 
 function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
+  const date = parseApiDate(dateString);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
@@ -64,7 +66,10 @@ export function HubPage() {
   });
   const [prompt, setPrompt] = useState("");
 
-  const defaultAgent = useMemo(() => agents.data?.items[0] ?? null, [agents.data?.items]);
+  const defaultAgent = useMemo(
+    () => pickDefaultAgent(agents.data?.items ?? [], teams.data?.items ?? []),
+    [agents.data?.items, teams.data?.items],
+  );
   const runtime = useQuery({
     queryKey: ["agent-runtime", defaultAgent?.id],
     queryFn: () => api.readAgentRuntime(defaultAgent!.id),
@@ -128,6 +133,7 @@ export function HubPage() {
     navigate(
       buildAgentChatHref(defaultAgent.id, {
         prompt: prompt.trim(),
+        newConversation: true,
       }),
     );
   }
@@ -140,7 +146,7 @@ export function HubPage() {
     return <main className="mx-auto min-h-screen max-w-4xl px-6 py-24">Loading workspace...</main>;
   }
 
-  if (!auth.firebaseEnabled) {
+  if (auth.authMode === "firebase" && !auth.firebaseEnabled) {
     return (
       <main className="mx-auto flex min-h-screen max-w-4xl items-center px-6 py-24">
         <div className="aura-border w-full rounded-lg bg-surface p-8">
@@ -165,6 +171,11 @@ export function HubPage() {
           <p className="mt-6 max-w-2xl text-base leading-7 text-muted">
             Sign in with Google to provision your default workspace, sync it with the backend, and continue directly into the chat canvas.
           </p>
+          {auth.authError ? (
+            <p className="mt-6 max-w-2xl rounded border border-border bg-surface px-4 py-3 text-sm text-primary">
+              {auth.authError}
+            </p>
+          ) : null}
           <button className="btn-primary mt-10" onClick={() => void auth.signIn()}>
             Sign In With Google
           </button>
@@ -191,6 +202,16 @@ export function HubPage() {
       {teamCreated === "1" ? (
         <div className="aura-border mb-8 rounded-lg bg-surface px-4 py-3 text-sm text-primary">
           Team created. Your new role-based workspace is ready.
+        </div>
+      ) : null}
+      {session.error ? (
+        <div className="mb-8 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-primary">
+          Backend session sync failed: {session.error.message}
+        </div>
+      ) : null}
+      {auth.authMode === "dev_bypass" ? (
+        <div className="aura-border mb-8 rounded-lg bg-surface px-4 py-3 text-sm text-primary">
+          Local dev auth bypass is active. Sutra is using the seeded local user instead of Google sign-in.
         </div>
       ) : null}
       <header className="flex items-start justify-between gap-6">
@@ -382,7 +403,10 @@ export function HubPage() {
         <section className="mt-16">
           <div className="mb-4 flex items-center justify-between">
             <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted">Recent Conversations</p>
-            <Link className="text-sm text-muted transition-colors hover:text-primary" to={buildAgentChatHref(defaultAgent.id)}>
+            <Link
+              className="text-sm text-muted transition-colors hover:text-primary"
+              to={buildAgentChatHref(defaultAgent.id, { newConversation: true })}
+            >
               New Chat
             </Link>
           </div>

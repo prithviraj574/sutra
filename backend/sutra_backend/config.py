@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from uuid import UUID
 
 from fastapi import Request
 from pydantic import AliasChoices, Field
@@ -39,6 +40,22 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("FIREBASE_SERVICE_ACCOUNT_JSON"),
     )
+    dev_auth_bypass_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SUTRA_DEV_AUTH_BYPASS"),
+    )
+    dev_auth_bypass_user_id: UUID = Field(
+        default=UUID("00000000-0000-0000-0000-000000000000"),
+        validation_alias=AliasChoices("SUTRA_DEV_AUTH_BYPASS_USER_ID"),
+    )
+    dev_auth_bypass_email: str = Field(
+        default="local-dev@sutra.local",
+        validation_alias=AliasChoices("SUTRA_DEV_AUTH_BYPASS_EMAIL"),
+    )
+    dev_auth_bypass_display_name: str = Field(
+        default="Local Dev User",
+        validation_alias=AliasChoices("SUTRA_DEV_AUTH_BYPASS_DISPLAY_NAME"),
+    )
     gcs_bucket_name: str | None = Field(
         default=None,
         validation_alias=AliasChoices("GCS_BUCKET_NAME"),
@@ -68,6 +85,90 @@ class Settings(BaseSettings):
             "SUTRA_RUNTIME_API_KEY",
             "SUTRA_DEV_RUNTIME_API_KEY",
         ),
+    )
+    honcho_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SUTRA_HONCHO_API_KEY", "HONCHO_API_KEY"),
+    )
+    honcho_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SUTRA_HONCHO_BASE_URL", "HONCHO_BASE_URL"),
+    )
+    honcho_environment: str = Field(
+        default="production",
+        validation_alias=AliasChoices("SUTRA_HONCHO_ENVIRONMENT", "HONCHO_ENVIRONMENT"),
+    )
+    honcho_memory_mode: str = Field(
+        default="hybrid",
+        validation_alias=AliasChoices("SUTRA_HONCHO_MEMORY_MODE"),
+    )
+    honcho_workspace_environment: str = Field(
+        default="prod",
+        validation_alias=AliasChoices("SUTRA_HONCHO_WORKSPACE_ENVIRONMENT"),
+    )
+    openrouter_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENROUTER_API_KEY"),
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_API_KEY"),
+    )
+    openai_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_BASE_URL"),
+    )
+    openai_model: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_MODEL"),
+    )
+    hermes_model: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HERMES_MODEL"),
+    )
+    llm_model: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LLM_MODEL"),
+    )
+    anthropic_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ANTHROPIC_API_KEY"),
+    )
+    anthropic_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ANTHROPIC_BASE_URL"),
+    )
+    minimax_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MINIMAX_API_KEY"),
+    )
+    minimax_cn_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MINIMAX_CN_API_KEY"),
+    )
+    minimax_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MINIMAX_BASE_URL"),
+    )
+    minimax_cn_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MINIMAX_CN_BASE_URL"),
+    )
+    browserbase_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BROWSERBASE_API_KEY"),
+    )
+    browserbase_project_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BROWSERBASE_PROJECT_ID"),
+    )
+    browser_use_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BROWSER_USE_API_KEY"),
+    )
+    firecrawl_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FIRECRAWL_API_KEY"),
     )
     dev_runtime_base_url: str | None = Field(
         default=None,
@@ -265,6 +366,10 @@ class Settings(BaseSettings):
         default=300,
         validation_alias=AliasChoices("SUTRA_RUNTIME_HEARTBEAT_STALE_SECONDS"),
     )
+
+    @property
+    def dev_auth_bypass_active(self) -> bool:
+        return self.dev_auth_bypass_enabled and self.app_env.lower() != "production"
 
 
 @lru_cache

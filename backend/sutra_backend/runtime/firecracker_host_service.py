@@ -27,6 +27,13 @@ class FirecrackerHostProvisionRequest(BaseModel):
     proxy_base_url: str
     runtime_api_url: str
     storage: dict[str, str | None]
+    honcho_config: dict[str, object] | None = None
+    runtime_env: dict[str, str] | None = None
+
+
+class FirecrackerHostRestartRequest(BaseModel):
+    honcho_config: dict[str, object] | None = None
+    runtime_env: dict[str, str] | None = None
 
 
 class FirecrackerHostMicrovmRead(BaseModel):
@@ -80,13 +87,38 @@ def _runtime_api_key(settings: Settings) -> str:
     return runtime_api_key
 
 
+def _honcho_config_path(spec: FirecrackerMicrovmSpec) -> Path:
+    return Path(spec.storage.hermes_home_path) / "honcho.json"
+
+
+def _write_honcho_config(spec: FirecrackerMicrovmSpec, honcho_config: dict[str, object] | None) -> None:
+    path = _honcho_config_path(spec)
+    if honcho_config is None:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(honcho_config, sort_keys=True, indent=2))
+    path.chmod(0o600)
+
+
 def _authorize(settings: Settings, authorization: str | None) -> None:
     expected = f"Bearer {_runtime_api_key(settings)}"
     if authorization != expected:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized.")
 
 
-def _launch_process_microvm(settings: Settings, spec: FirecrackerMicrovmSpec) -> int:
+def _proxy_timeout_seconds(settings: Settings) -> float:
+    # Give the host proxy a small cushion so the control plane timeout remains
+    # the primary request deadline for long-running Hermes responses.
+    return max(60.0, float(settings.hermes_api_route_timeout_seconds) + 5.0)
+
+
+def _launch_process_microvm(
+    settings: Settings,
+    spec: FirecrackerMicrovmSpec,
+    *,
+    runtime_env: dict[str, str] | None = None,
+) -> int:
     env = os.environ.copy()
     env.update(
         {
@@ -97,6 +129,7 @@ def _launch_process_microvm(settings: Settings, spec: FirecrackerMicrovmSpec) ->
             "API_SERVER_KEY": _runtime_api_key(settings),
         }
     )
+    env.update(runtime_env or {})
     if spec.storage.shared_workspace_path:
         env["SUTRA_SHARED_WORKSPACE_PATH"] = spec.storage.shared_workspace_path
     command = settings.gcp_runtime_gateway_command
@@ -209,6 +242,7 @@ def provision_microvm(
     config_path = _config_path(settings, spec)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(json.dumps(build_firecracker_config(settings=settings, spec=spec), indent=2))
+    _write_honcho_config(spec, payload.honcho_config)
 
     pid: int | None = None
     launch_state = "configured"
@@ -216,7 +250,7 @@ def provision_microvm(
         pid = _launch_firecracker_microvm(settings, spec, config_path=config_path)
         launch_state = "provisioning"
     else:
-        pid = _launch_process_microvm(settings, spec)
+        pid = _launch_process_microvm(settings, spec, runtime_env=payload.runtime_env)
         launch_state = "running"
 
     record = {
@@ -227,6 +261,8 @@ def provision_microvm(
         "proxy_base_url": spec.proxy_base_url,
         "runtime_api_url": spec.runtime_api_url,
         "storage": payload.storage,
+        "honcho_config": payload.honcho_config,
+        "runtime_env": payload.runtime_env,
         "config_path": str(config_path),
         "pid": pid,
     }
@@ -238,6 +274,7 @@ def provision_microvm(
 def restart_microvm(
     microvm_id: str,
     authorization: str | None = Header(default=None),
+    payload: FirecrackerHostRestartRequest | None = None,
 ) -> FirecrackerHostMicrovmRead:
     settings = get_settings()
     _authorize(settings, authorization)
@@ -264,13 +301,22 @@ def restart_microvm(
             ),
         ),
     )
+    honcho_config = payload.honcho_config if payload is not None else record.get("honcho_config")
+    runtime_env = payload.runtime_env if payload is not None else record.get("runtime_env")
+    _write_honcho_config(spec, honcho_config if isinstance(honcho_config, dict) else None)
     config_path = Path(str(record.get("config_path") or _config_path(settings, spec)))
     if settings.gcp_runtime_firecracker_execute:
         record["pid"] = _launch_firecracker_microvm(settings, spec, config_path=config_path)
         record["state"] = "provisioning"
     else:
-        record["pid"] = _launch_process_microvm(settings, spec)
+        record["pid"] = _launch_process_microvm(
+            settings,
+            spec,
+            runtime_env=runtime_env if isinstance(runtime_env, dict) else None,
+        )
         record["state"] = "running"
+    record["honcho_config"] = honcho_config if isinstance(honcho_config, dict) else None
+    record["runtime_env"] = runtime_env if isinstance(runtime_env, dict) else None
     _write_record(settings, microvm_id, record)
     return FirecrackerHostMicrovmRead.model_validate(record)
 
@@ -293,7 +339,7 @@ async def proxy_microvm(
         for key, value in request.headers.items()
         if key.lower() not in {"host", "content-length"}
     }
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=_proxy_timeout_seconds(settings)) as client:
         response = await client.request(
             request.method,
             target_url,

@@ -38,6 +38,7 @@ def list_agents(
         select(Agent)
         .join(Team, Team.id == Agent.team_id)
         .where(Team.user_id == user.id)
+        .order_by(Team.mode.asc(), Team.created_at.asc(), Agent.created_at.asc())
     )
     agents = session.exec(statement).all()
     return AgentListResponse(items=[AgentRead.model_validate(agent, from_attributes=True) for agent in agents])

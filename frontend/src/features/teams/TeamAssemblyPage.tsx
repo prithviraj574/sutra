@@ -50,19 +50,11 @@ export function TeamAssemblyPage() {
   );
 
   const createTeam = useMutation({
-    mutationFn: () =>
-      api.createTeam({
-        name: name.trim(),
-        description: description.trim() || undefined,
-        agents: selectedKeys.map((key) => ({ role_template_key: key })),
-      }),
-    onSuccess: async (payload) => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["teams", session.data?.user.id] }),
-        queryClient.invalidateQueries({ queryKey: ["agents", session.data?.user.id] }),
-      ]);
-      navigate(`/?teamCreated=1&teamId=${payload.team.id}`, { replace: true });
-    },
+    mutationFn: (payload: {
+      name: string;
+      description?: string;
+      agents: Array<{ role_template_key: string }>;
+    }) => api.createTeam(payload),
   });
 
   function toggleRole(key: string) {
@@ -73,12 +65,21 @@ export function TeamAssemblyPage() {
     );
   }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!name.trim() || selectedKeys.length === 0) {
       return;
     }
-    void createTeam.mutateAsync();
+    const payload = await createTeam.mutateAsync({
+      name: name.trim(),
+      description: description.trim() || undefined,
+      agents: selectedKeys.map((key) => ({ role_template_key: key })),
+    });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["teams", session.data?.user.id] }),
+      queryClient.invalidateQueries({ queryKey: ["agents", session.data?.user.id] }),
+    ]);
+    navigate(`/?teamCreated=1&teamId=${payload.team.id}`, { replace: true });
   }
 
   return (

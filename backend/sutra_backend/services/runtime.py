@@ -100,7 +100,14 @@ async def run_agent_response(
     settings: Settings,
 ) -> AgentResponseResult:
     agent = get_owned_agent(session, agent_id=agent_id, user=user)
-    ensure_agent_runtime_lease(session, agent=agent, settings=settings)
+    existing_lease = session.exec(select(RuntimeLease).where(RuntimeLease.agent_id == agent.id)).first()
+    if existing_lease is None:
+        if settings.runtime_provider == "static_dev":
+            ensure_agent_runtime_lease(session, agent=agent, settings=settings)
+        else:
+            raise RuntimeNotReadyError(
+                "Agent runtime is not provisioned yet. Provision the runtime before sending a prompt."
+            )
     lease_status = reconcile_runtime_lease(
         session,
         user=user,

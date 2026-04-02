@@ -16,11 +16,21 @@ describe("agent chat routes", () => {
     ).toBe("/agents/agent-1?conversationId=conversation-1&prompt=Build+a+dashboard");
   });
 
+  it("builds a chat path for an explicit new conversation", () => {
+    expect(
+      buildAgentChatHref("agent-1", {
+        prompt: "Build a dashboard",
+        newConversation: true,
+      }),
+    ).toBe("/agents/agent-1?prompt=Build+a+dashboard&new=1");
+  });
+
   it("reads chat params from the current url", () => {
-    const params = new URLSearchParams("conversationId=conversation-1&prompt=Build+a+dashboard");
+    const params = new URLSearchParams("conversationId=conversation-1&prompt=Build+a+dashboard&new=1");
     expect(readAgentChatParams(params)).toEqual({
       conversationId: "conversation-1",
       prompt: "Build a dashboard",
+      newConversation: true,
     });
   });
 });

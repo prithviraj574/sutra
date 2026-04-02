@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from tempfile import NamedTemporaryFile
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, select
@@ -148,3 +149,26 @@ def test_auth_me_bootstraps_default_agent_runtime_when_configured(monkeypatch) -
     lease = session.exec(select(RuntimeLease).where(RuntimeLease.agent_id == agent.id)).one()
     assert agent.status == "ready"
     assert lease.api_base_url == "http://runtime.internal"
+
+
+def test_auth_me_supports_local_dev_auth_bypass() -> None:
+    client, session = build_client(
+        Settings(
+            app_env="development",
+            database_url="sqlite://",
+            dev_auth_bypass_enabled=True,
+        )
+    )
+
+    response = client.get("/api/auth/me")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["user"]["id"] == "00000000-0000-0000-0000-000000000000"
+    assert payload["user"]["firebase_uid"] == "00000000-0000-0000-0000-000000000000"
+    assert payload["user"]["email"] == "local-dev@sutra.local"
+
+    persisted_user = session.get(User, UUID("00000000-0000-0000-0000-000000000000"))
+    assert persisted_user is not None
+    assert session.exec(select(Team).where(Team.user_id == persisted_user.id)).one()
+    assert session.exec(select(Agent)).one()
