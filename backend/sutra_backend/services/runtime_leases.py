@@ -9,7 +9,7 @@ from uuid import UUID
 from sqlmodel import Session, select
 
 from sutra_backend.config import Settings
-from sutra_backend.models import Agent, RuntimeLease, Team, User, utcnow
+from sutra_backend.models import Agent, RuntimeLease, User, utcnow
 from sutra_backend.runtime.client import (
     HermesRuntimeClient,
     ResponsesRequest,
@@ -69,7 +69,7 @@ def assess_agent_runtime_isolation(
     settings: Settings,
 ) -> tuple[bool, str]:
     sibling_agents = session.exec(
-        select(Agent).where(Agent.team_id == agent.team_id).where(Agent.id != agent.id)
+        select(Agent).where(Agent.user_id == agent.user_id).where(Agent.id != agent.id)
     ).all()
 
     if not agent.hermes_home_uri:
@@ -116,13 +116,6 @@ def assess_agent_runtime_isolation(
             return False, "Shared workspace path must not contain the private HERMES_HOME path."
         if _is_parent_or_same(shared_workspace_path, private_volume_path):
             return False, "Shared workspace path must not contain the private volume path."
-
-    team = session.get(Team, agent.team_id)
-    if team is not None and team.shared_workspace_uri:
-        if team.shared_workspace_uri == agent.hermes_home_uri:
-            return False, "Shared workspace URI must not equal the agent HERMES_HOME URI."
-        if team.shared_workspace_uri == agent.private_volume_uri:
-            return False, "Shared workspace URI must not equal the agent private volume URI."
 
     return True, "Agent private storage is isolated from sibling agents; only the shared workspace may be shared."
 

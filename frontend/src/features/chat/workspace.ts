@@ -1,4 +1,4 @@
-import type { SharedWorkspaceItem } from "../../lib/api";
+import type { SharedWorkspaceItem } from "../../lib/api.generated";
 
 export function listAgentConversationWorkspaceItems(
   items: SharedWorkspaceItem[],

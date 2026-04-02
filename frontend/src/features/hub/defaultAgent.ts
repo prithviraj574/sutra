@@ -1,4 +1,4 @@
-import type { Agent, Team } from "../../lib/api";
+import type { Agent, Team } from "../../lib/api.generated";
 
 export function pickDefaultAgent(
   agents: Agent[],
@@ -13,7 +13,7 @@ export function pickDefaultAgent(
   );
 
   return (
-    agents.find((agent) => personalTeamIds.has(agent.team_id)) ??
+    agents.find((agent) => agent.team_ids.some((teamId) => personalTeamIds.has(teamId))) ??
     agents.find((agent) => agent.status === "ready") ??
     agents[0]
   );

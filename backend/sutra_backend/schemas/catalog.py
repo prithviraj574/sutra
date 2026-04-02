@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from sutra_backend.enums import AgentStatus, ArtifactKind, RuntimeKind, TeamMode, ToolProfile, WorkspaceItemKind
 
 
 class TeamRead(BaseModel):
@@ -13,22 +15,21 @@ class TeamRead(BaseModel):
     user_id: UUID
     name: str
     description: str | None = None
-    mode: str
+    mode: TeamMode
     shared_workspace_uri: str | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class AgentRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: UUID
-    team_id: UUID
+    user_id: UUID
+    team_ids: list[UUID] = Field(default_factory=list)
     role_template_id: UUID | None = None
     name: str
     role_name: str
-    status: str
-    runtime_kind: str
+    status: AgentStatus
+    runtime_kind: RuntimeKind
     hermes_home_uri: str | None = None
     private_volume_uri: str | None = None
     shared_workspace_enabled: bool
@@ -52,7 +53,7 @@ class RoleTemplateRead(BaseModel):
     name: str
     description: str | None = None
     default_system_prompt: str
-    default_tool_profile: str
+    default_tool_profile: ToolProfile
     created_at: datetime
     updated_at: datetime
 
@@ -83,7 +84,7 @@ class SharedWorkspaceItemRead(BaseModel):
     id: UUID
     team_id: UUID
     path: str
-    kind: str
+    kind: WorkspaceItemKind
     size_bytes: int | None = None
     content_text: str | None = None
     conversation_id: UUID | None = None
@@ -100,7 +101,7 @@ class ArtifactRead(BaseModel):
     conversation_id: UUID | None = None
     agent_id: UUID | None = None
     name: str
-    kind: str
+    kind: ArtifactKind
     uri: str
     mime_type: str | None = None
     preview_uri: str | None = None
@@ -122,7 +123,7 @@ class TeamWorkspaceResponse(BaseModel):
 
 class WorkspaceItemUpsertRequest(BaseModel):
     path: str
-    kind: str = "file"
+    kind: WorkspaceItemKind = WorkspaceItemKind.FILE
     content_text: str | None = None
 
 

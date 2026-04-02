@@ -11,7 +11,7 @@ from sutra_backend.auth import dependencies as auth_dependencies
 from sutra_backend.config import Settings
 from sutra_backend.db import create_database_engine, get_session
 from sutra_backend.main import create_app
-from sutra_backend.models import Agent, AutomationJob
+from sutra_backend.models import Agent, AgentTeam, AutomationJob
 from sutra_backend.runtime.client import HermesResponse
 
 
@@ -66,6 +66,7 @@ def test_jobs_api_can_create_list_update_and_run_agent_job(monkeypatch) -> None:
     client, session = build_client(settings)
     authenticate_default_user(client, monkeypatch)
     agent = session.exec(select(Agent)).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.mode == "personal")).one()
 
     async def fake_create_response(self, request, *, request_env=None):
         return HermesResponse(
@@ -87,13 +88,15 @@ def test_jobs_api_can_create_list_update_and_run_agent_job(monkeypatch) -> None:
             "schedule": "0 9 * * *",
             "prompt": "Summarize what changed since yesterday.",
             "agent_id": str(agent.id),
+            "agent_team_id": str(team.id),
         },
     )
     assert create_response.status_code == 201
     job_id = create_response.json()["job"]["id"]
+    assert create_response.json()["job"]["agent_team_id"] == str(team.id)
 
     list_response = client.get(
-        f"/api/jobs?agent_id={agent.id}",
+        f"/api/jobs?agent_id={agent.id}&agent_team_id={team.id}",
         headers={"Authorization": "Bearer valid-token"},
     )
     assert list_response.status_code == 200
@@ -137,3 +140,36 @@ def test_jobs_api_can_create_list_update_and_run_agent_job(monkeypatch) -> None:
     persisted_job = session.get(AutomationJob, UUID(job_id))
     assert persisted_job is not None
     assert persisted_job.last_run_at is not None
+    assert persisted_job.agent_team_id == team.id
+
+
+def test_jobs_api_rejects_team_scoped_job_for_non_member_agent(monkeypatch) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite://",
+        runtime_provider="static_dev",
+        dev_runtime_base_url="http://runtime.internal",
+        dev_runtime_api_key="runtime-key",
+    )
+    client, session = build_client(settings)
+    authenticate_default_user(client, monkeypatch)
+    owned_agent = session.exec(select(Agent)).one()
+    foreign_team = AgentTeam(user_id=owned_agent.user_id, name="Focused Crew", mode="team")
+    session.add(foreign_team)
+    session.commit()
+    session.refresh(foreign_team)
+
+    response = client.post(
+        "/api/jobs",
+        headers={"Authorization": "Bearer valid-token"},
+        json={
+            "name": "Out-of-band review",
+            "schedule": "0 9 * * 1",
+            "prompt": "Check in with the team.",
+            "agent_id": str(owned_agent.id),
+            "agent_team_id": str(foreign_team.id),
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Automation job agent must belong to the selected team."

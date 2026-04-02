@@ -7,7 +7,7 @@ import { TeamAssemblyPage } from "./TeamAssemblyPage";
 
 const navigateMock = vi.fn();
 const api = {
-  listRoleTemplates: vi.fn(),
+  getRoleTemplates: vi.fn(),
   createTeam: vi.fn(),
 };
 
@@ -29,12 +29,12 @@ vi.mock("react-router-dom", async () => {
 describe("TeamAssemblyPage", () => {
   beforeEach(() => {
     navigateMock.mockReset();
-    api.listRoleTemplates.mockReset();
+    api.getRoleTemplates.mockReset();
     api.createTeam.mockReset();
   });
 
   it("navigates to the hub after a successful team create", async () => {
-    api.listRoleTemplates.mockResolvedValue({
+    api.getRoleTemplates.mockResolvedValue({
       items: [
         {
           id: "role-planner",
@@ -93,14 +93,17 @@ describe("TeamAssemblyPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Team" }));
 
     await waitFor(() => {
+      expect(api.getRoleTemplates).toHaveBeenCalledWith();
       expect(api.createTeam).toHaveBeenCalledWith({
-        name: "Launch Crew",
-        description: "A focused cross-functional team for research, planning, and execution.",
-        agents: [
-          { role_template_key: "planner" },
-          { role_template_key: "researcher" },
-          { role_template_key: "builder" },
-        ],
+        body: {
+          name: "Launch Crew",
+          description: "A focused cross-functional team for research, planning, and execution.",
+          agents: [
+            { role_template_key: "planner" },
+            { role_template_key: "researcher" },
+            { role_template_key: "builder" },
+          ],
+        },
       });
       expect(navigateMock).toHaveBeenCalledWith("/?teamCreated=1&teamId=team-123", {
         replace: true,

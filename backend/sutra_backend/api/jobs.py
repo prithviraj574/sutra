@@ -34,13 +34,13 @@ jobs_router = APIRouter()
 
 @jobs_router.get("/jobs", tags=["jobs"], response_model=AutomationJobListResponse)
 def get_jobs(
-    team_id: UUID | None = Query(default=None),
+    agent_team_id: UUID | None = Query(default=None),
     agent_id: UUID | None = Query(default=None),
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> AutomationJobListResponse:
     try:
-        jobs = list_jobs(session, user=user, team_id=team_id, agent_id=agent_id)
+        jobs = list_jobs(session, user=user, agent_team_id=agent_team_id, agent_id=agent_id)
     except (AutomationJobError, AgentNotFoundError) as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -62,8 +62,8 @@ def post_job(
             name=payload.name,
             schedule=payload.schedule,
             prompt=payload.prompt,
-            team_id=payload.team_id,
             agent_id=payload.agent_id,
+            agent_team_id=payload.agent_team_id,
             enabled=payload.enabled,
         )
     except (AutomationJobError, AgentNotFoundError) as exc:

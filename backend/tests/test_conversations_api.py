@@ -12,7 +12,7 @@ from sutra_backend.auth import dependencies as auth_dependencies
 from sutra_backend.config import Settings
 from sutra_backend.db import create_database_engine, get_session
 from sutra_backend.main import create_app
-from sutra_backend.models import Agent, Conversation, Message
+from sutra_backend.models import Agent, AgentTeam, Conversation, Message
 from sutra_backend.runtime.client import HermesResponse
 from sutra_backend.services import runtime as runtime_service
 
@@ -68,6 +68,8 @@ def test_conversation_routes_return_persisted_history(monkeypatch) -> None:
     client, session = build_client(settings)
     authenticate_default_user(client, monkeypatch)
     agent = session.exec(select(Agent)).one()
+    personal_team = session.exec(select(AgentTeam).where(AgentTeam.mode == "personal")).one()
+    personal_team = session.exec(select(AgentTeam).where(AgentTeam.mode == "personal")).one()
 
     async def fake_create_response(self, request, *, request_env=None):
         return HermesResponse(
@@ -104,6 +106,7 @@ def test_conversation_routes_return_persisted_history(monkeypatch) -> None:
 
     assert len(conversations) == 1
     assert conversations[0]["id"] == conversation_id
+    assert conversations[0]["mode"] == "agent"
     assert conversations[0]["latest_response_id"] == "resp_123"
     assert [message["actor_type"] for message in messages] == ["user", "assistant"]
 
@@ -119,6 +122,7 @@ def test_conversation_message_route_blocks_cross_tenant_access(monkeypatch) -> N
     client, session = build_client(settings)
     authenticate_default_user(client, monkeypatch)
     agent = session.exec(select(Agent)).one()
+    personal_team = session.exec(select(AgentTeam).where(AgentTeam.mode == "personal")).one()
 
     async def fake_create_response(self, request, *, request_env=None):
         return HermesResponse(
@@ -139,7 +143,8 @@ def test_conversation_message_route_blocks_cross_tenant_access(monkeypatch) -> N
     foreign_conversation = session.exec(
         select(Conversation).where(Conversation.id == UUID(conversation_id))
     ).one()
-    foreign_conversation.team_id = None
+    foreign_conversation.agent_team_id = None
+    foreign_conversation.agent_id = None
     session.add(foreign_conversation)
     session.add(
         Message(
@@ -169,6 +174,7 @@ def test_conversation_stream_emits_runtime_message_and_workspace_events(monkeypa
     client, session = build_client(settings)
     authenticate_default_user(client, monkeypatch)
     agent = session.exec(select(Agent)).one()
+    personal_team = session.exec(select(AgentTeam).where(AgentTeam.mode == "personal")).one()
 
     async def fake_create_response(self, request, *, request_env=None):
         return HermesResponse(
@@ -213,3 +219,38 @@ def test_conversation_stream_emits_runtime_message_and_workspace_events(monkeypa
     assert runtime_payload["isolation_ok"] is True
     workspace_payload = json.loads(payload_lines[-1])["payload"]
     assert workspace_payload["path"].startswith("conversations/")
+
+
+def test_team_member_response_creates_team_context_conversation(monkeypatch) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite://",
+        runtime_provider="static_dev",
+        dev_runtime_base_url="http://runtime.internal",
+        dev_runtime_api_key="runtime-key",
+    )
+    client, session = build_client(settings)
+    authenticate_default_user(client, monkeypatch)
+    agent = session.exec(select(Agent)).one()
+    personal_team = session.exec(select(AgentTeam).where(AgentTeam.mode == "personal")).one()
+
+    async def fake_create_response(self, request, *, request_env=None):
+        return HermesResponse(
+            response_id="resp_team_member",
+            output_text="Team-context assistant reply",
+            raw_response={"id": "resp_team_member", "output": []},
+        )
+
+    monkeypatch.setattr(runtime_service.HermesRuntimeClient, "create_response", fake_create_response)
+
+    response = client.post(
+        f"/api/teams/{personal_team.id}/agents/{agent.id}/responses",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"input": "Review the shared plan and give your view."},
+    )
+
+    assert response.status_code == 200
+    conversation = session.get(Conversation, UUID(response.json()["conversation_id"]))
+    assert conversation is not None
+    assert conversation.mode == "team_member"
+    assert conversation.agent_team_id == personal_team.id

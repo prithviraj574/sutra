@@ -2,7 +2,13 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { type Agent, type Artifact, type ChatMessage, type ConversationStreamEvent, type SharedWorkspaceItem } from "../../lib/api";
+import {
+  type Agent,
+  type Artifact,
+  type ChatMessage,
+  type ConversationStreamEvent,
+  type SharedWorkspaceItem,
+} from "../../lib/api.generated";
 import { useApiClient, useBackendSession } from "../auth/useSession";
 import { readAgentChatParams } from "./routes";
 import { buildWorkspaceExportPath, listAgentConversationWorkspaceItems } from "./workspace";
@@ -60,13 +66,40 @@ export function ChatPage({ agentId }: ChatPageProps) {
     queryFn: () => api.listAgents(),
     enabled: !!session.data,
   });
+  const teams = useQuery({
+    queryKey: ["teams", session.data?.user.id],
+    queryFn: () => api.listTeams(),
+    enabled: !!session.data,
+  });
+  const normalizedAgents = useMemo<Agent[]>(
+    () =>
+      (agents.data?.items ?? []).map((entry) => ({
+        ...entry,
+        team_ids: entry.team_ids ?? [],
+      })),
+    [agents.data?.items],
+  );
   const agent = useMemo<Agent | null>(
-    () => agents.data?.items.find((entry) => entry.id === agentId) ?? null,
-    [agentId, agents.data?.items],
+    () => normalizedAgents.find((entry) => entry.id === agentId) ?? null,
+    [agentId, normalizedAgents],
+  );
+  const personalWorkspaceTeamId = useMemo(
+    () =>
+      agent?.team_ids.find((teamId) =>
+        (teams.data?.items ?? []).some((team) => team.id === teamId && team.mode === "personal"),
+      ),
+    [agent?.team_ids, teams.data?.items],
   );
   const conversations = useQuery({
     queryKey: ["agent-conversations", agentId],
-    queryFn: () => api.listAgentConversations(agentId),
+    queryFn: () =>
+      api.getAgentConversations({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+      }),
     enabled: !!agent,
   });
   const currentParams = readAgentChatParams(searchParams);
@@ -81,29 +114,50 @@ export function ChatPage({ agentId }: ChatPageProps) {
       : conversations.data?.items[0]?.id);
   const runtime = useQuery({
     queryKey: ["agent-runtime", agentId],
-    queryFn: () => api.readAgentRuntime(agentId),
+    queryFn: () =>
+      api.getAgentRuntime({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+      }),
     retry: false,
   });
   const runtimeReady = runtime.data?.lease.ready ?? false;
   const teamWorkspace = useQuery({
-    queryKey: ["team-workspace", agent?.team_id],
-    queryFn: () => api.readTeamWorkspace(agent!.team_id),
-    enabled: !!agent?.team_id,
+    queryKey: ["team-workspace", personalWorkspaceTeamId],
+    queryFn: () =>
+      api.getTeamWorkspace({
+        params: {
+          path: {
+            team_id: personalWorkspaceTeamId!,
+          },
+        },
+      }),
+    enabled: !!personalWorkspaceTeamId,
   });
   const teamArtifacts = useQuery({
-    queryKey: ["team-artifacts", agent?.team_id],
-    queryFn: () => api.listTeamArtifacts(agent!.team_id),
-    enabled: !!agent?.team_id,
+    queryKey: ["team-artifacts", personalWorkspaceTeamId],
+    queryFn: () =>
+      api.getTeamArtifacts({
+        params: {
+          path: {
+            team_id: personalWorkspaceTeamId!,
+          },
+        },
+      }),
+    enabled: !!personalWorkspaceTeamId,
   });
   const githubConnection = useQuery({
     queryKey: ["github-connection", session.data?.user.id],
-    queryFn: () => api.readGitHubConnection(),
+    queryFn: () => api.readGithubConnection(),
     enabled: !!session.data,
     retry: false,
   });
   const githubRepositories = useQuery({
     queryKey: ["github-repositories", session.data?.user.id],
-    queryFn: () => api.listGitHubRepositories(),
+    queryFn: () => api.getGithubRepositories(),
     enabled: !!githubConnection.data?.connection,
     retry: false,
   });
@@ -113,27 +167,55 @@ export function ChatPage({ agentId }: ChatPageProps) {
     enabled: !!session.data,
   });
   const provisionRuntime = useMutation({
-    mutationFn: () => api.provisionAgentRuntime(agentId),
+    mutationFn: () =>
+      api.provisionAgentRuntime({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+      }),
     onSuccess: () => {
       setStreamError(null);
       void queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
     },
   });
   const verifyRuntime = useMutation({
-    mutationFn: () => api.verifyAgentRuntime(agentId),
+    mutationFn: () =>
+      api.verifyAgentRuntime({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+      }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
     },
   });
   const restartRuntime = useMutation({
-    mutationFn: () => api.restartAgentRuntime(agentId),
+    mutationFn: () =>
+      api.restartAgentRuntime({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+      }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
     },
   });
   const persistedMessages = useQuery({
     queryKey: ["conversation-messages", activeConversationId],
-    queryFn: () => api.listConversationMessages(activeConversationId!),
+    queryFn: () =>
+      api.getConversationMessages({
+        params: {
+          path: {
+            conversation_id: activeConversationId!,
+          },
+        },
+      }),
     enabled: !!activeConversationId,
   });
 
@@ -197,7 +279,7 @@ export function ChatPage({ agentId }: ChatPageProps) {
           current.includes(itemId) ? current : [itemId, ...current].slice(0, 3),
         );
         setSelectedWorkspaceItemId(itemId);
-        void queryClient.invalidateQueries({ queryKey: ["team-workspace", agent?.team_id] });
+        void queryClient.invalidateQueries({ queryKey: ["team-workspace", personalWorkspaceTeamId] });
         return;
       }
       if (event.type === "runtime.state_changed") {
@@ -230,7 +312,7 @@ export function ChatPage({ agentId }: ChatPageProps) {
       cancelled = true;
       closeStream();
     };
-  }, [activeConversationId, agent?.team_id, agentId, api, pendingPromptPreview, queryClient]);
+  }, [activeConversationId, agentId, api, pendingPromptPreview, personalWorkspaceTeamId, queryClient]);
 
   const responseMutation = useMutation({
     mutationFn: ({
@@ -240,10 +322,19 @@ export function ChatPage({ agentId }: ChatPageProps) {
       prompt: string;
       conversationIdOverride?: string;
     }) =>
-      api.createAgentResponse(agentId, {
-        input: prompt,
-        conversation_id: conversationIdOverride,
-        secret_ids: selectedSecretIds,
+      api.createAgentResponse({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+        body: {
+          input: prompt,
+          conversation_id: conversationIdOverride,
+          store: true,
+          model: "hermes-agent",
+          secret_ids: selectedSecretIds,
+        },
       }),
     onSuccess: (response) => {
       setPendingPromptPreview("");
@@ -254,8 +345,8 @@ export function ChatPage({ agentId }: ChatPageProps) {
       }
       void queryClient.invalidateQueries({ queryKey: ["conversation-messages", response.conversation_id] });
       void queryClient.invalidateQueries({ queryKey: ["agent-conversations", agentId] });
-      void queryClient.invalidateQueries({ queryKey: ["team-workspace", agent?.team_id] });
-      void queryClient.invalidateQueries({ queryKey: ["team-artifacts", agent?.team_id] });
+      void queryClient.invalidateQueries({ queryKey: ["team-workspace", personalWorkspaceTeamId] });
+      void queryClient.invalidateQueries({ queryKey: ["team-artifacts", personalWorkspaceTeamId] });
       void queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
     },
     onError: () => {
@@ -282,13 +373,21 @@ export function ChatPage({ agentId }: ChatPageProps) {
 
   const exportMutation = useMutation({
     mutationFn: () =>
-      api.exportWorkspaceItemToGitHub(agent!.team_id, selectedWorkspaceItemId!, {
-        repository_full_name: selectedRepository,
-        path: exportPath.trim(),
-        commit_message: commitMessage.trim(),
+      api.exportWorkspaceItem({
+        params: {
+          path: {
+            team_id: personalWorkspaceTeamId!,
+            item_id: selectedWorkspaceItemId!,
+          },
+        },
+        body: {
+          repository_full_name: selectedRepository,
+          path: exportPath.trim(),
+          commit_message: commitMessage.trim(),
+        },
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["team-artifacts", agent?.team_id] });
+      await queryClient.invalidateQueries({ queryKey: ["team-artifacts", personalWorkspaceTeamId] });
     },
   });
 
@@ -358,7 +457,7 @@ export function ChatPage({ agentId }: ChatPageProps) {
 
   function handleExport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!agent?.team_id || !selectedWorkspaceItemId || !selectedRepository || !exportPath.trim() || !commitMessage.trim()) {
+    if (!personalWorkspaceTeamId || !selectedWorkspaceItemId || !selectedRepository || !exportPath.trim() || !commitMessage.trim()) {
       return;
     }
     void exportMutation.mutateAsync();

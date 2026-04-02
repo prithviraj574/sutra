@@ -4,16 +4,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useBackendSession } from "./useSession";
 
-const { readSession, createApiClient, useAuth } = vi.hoisted(() => {
-  const readSession = vi.fn();
+const { getSession, createApiClient, useAuth } = vi.hoisted(() => {
+  const getSession = vi.fn();
   return {
-    readSession,
-    createApiClient: vi.fn(() => ({ readSession })),
+    getSession,
+    createApiClient: vi.fn(() => ({ readCurrentUser: getSession })),
     useAuth: vi.fn(),
   };
 });
 
-vi.mock("../../lib/api", () => ({
+vi.mock("../../lib/api.generated", () => ({
   createApiClient,
 }));
 
@@ -36,7 +36,7 @@ function SessionProbe() {
 
 describe("useBackendSession", () => {
   beforeEach(() => {
-    readSession.mockReset();
+    getSession.mockReset();
     createApiClient.mockClear();
     useAuth.mockReset();
   });
@@ -53,7 +53,7 @@ describe("useBackendSession", () => {
       signOutUser: vi.fn(),
     };
 
-    readSession.mockResolvedValue({
+    getSession.mockResolvedValue({
       user: {
         id: "user-1",
         firebase_uid: "firebase-user-1",
@@ -72,7 +72,8 @@ describe("useBackendSession", () => {
     );
 
     await screen.findByText("user@example.com");
-    expect(readSession).toHaveBeenCalledTimes(1);
+    expect(getSession).toHaveBeenCalledTimes(1);
+    expect(getSession).toHaveBeenCalledWith();
 
     authState.tokenVersion = 2;
     view.rerender(
@@ -81,6 +82,6 @@ describe("useBackendSession", () => {
       </QueryClientProvider>,
     );
 
-    await waitFor(() => expect(readSession).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getSession).toHaveBeenCalledTimes(2));
   });
 });

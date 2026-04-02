@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { SharedWorkspaceItem } from "../../lib/api";
+import type { SharedWorkspaceItem } from "../../lib/api.generated";
 import { buildWorkspaceExportPath, listAgentConversationWorkspaceItems } from "./workspace";
 
 const items: SharedWorkspaceItem[] = [

@@ -2,7 +2,7 @@
 
 Status: Approved and in execution  
 Execution State: Firecracker-host runtime proof and isolation hardening in progress  
-Last Updated: 2026-03-31  
+Last Updated: 2026-04-03  
 Primary Reference: [`meta/PRD/phase_1_managed_hermes_wrapper.md`](/Users/prithviraj/Desktop/Misc/sutra/meta/PRD/phase_1_managed_hermes_wrapper.md)
 
 ## Current Progress
@@ -84,6 +84,12 @@ Completed in the first execution pass:
 - the mixed-mode developer path now works live: local `sutra_backend` and local `frontend` can run against the remote GCP runtime host using the repo launch scripts and local Firebase config
 - first-sign-in runtime provisioning now succeeds through the real remote host path, and runtime verification confirms request-readiness plus private-filesystem isolation from the local control plane
 - the remaining live runtime blocker is upstream Hermes/provider auth inside the hosted agent process: agent runs currently complete through the control-plane path but can return provider-auth errors until managed LLM/browser credentials are injected
+- agent/team ownership is now cleaner in the data model: agents are durable user-owned entities, team membership lives in `AgentTeamAssignment`, and automation jobs are owned by one agent with optional team context instead of a nullable team-or-agent split
+- conversation context is now explicit at the control-plane layer: conversations carry `agent_team_id` when they are team-scoped, direct agent chat uses `mode=agent`, and the backend now has a first team-member response path instead of inferring team context from the agent row
+- agents no longer carry a baked-in `home_team_id`: personal-workspace behavior now comes from actual personal-team membership, team execution uses explicit team context from requests/tasks, and managed runtimes no longer attach one permanent shared workspace by default
+- the backend domain model now uses explicit enums for core state/mode fields instead of free-form strings, which should make the Phase 1 contract less drift-prone across models and API schemas
+- Alembic history has been reset to a single clean baseline migration generated from current `SQLModel.metadata`, and the repo should prefer `alembic revision --autogenerate` over hand-written migration files going forward
+- the frontend API surface is now consolidated into one generated module at `frontend/src/lib/api.generated.ts`; the old parallel `api.ts` shim is gone, the frontend regenerates from the running backend's built-in `/openapi.json` endpoint, JSON requests now go through `openapi-fetch` with auth middleware and generated per-endpoint client methods (so feature code no longer calls `requestData(...)` directly), and SSE remains the only custom transport helper
 
 Next on the critical path:
 

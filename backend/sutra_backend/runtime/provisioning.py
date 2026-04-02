@@ -12,7 +12,7 @@ import httpx
 from sqlmodel import Session, select
 
 from sutra_backend.config import BACKEND_ROOT, Settings
-from sutra_backend.models import Agent, RuntimeLease, Team, utcnow
+from sutra_backend.models import Agent, RuntimeLease, utcnow
 from sutra_backend.runtime.errors import RuntimeNotReadyError
 from sutra_backend.runtime.firecracker_host import (
     build_agent_hermes_home_path,
@@ -928,9 +928,6 @@ class GcpFirecrackerRuntimeProvisioner:
         agent: Agent,
         host_api_base_url: str,
     ) -> GcpFirecrackerMicrovm:
-        team = session.get(Team, agent.team_id)
-        if team is None:
-            raise RuntimeNotReadyError("Agent team is missing; cannot build Honcho workspace identity.")
         host_client = GcpFirecrackerHostClient(settings=self.settings, base_url=host_api_base_url)
         spec = build_firecracker_microvm_spec(
             settings=self.settings,
@@ -953,7 +950,7 @@ class GcpFirecrackerRuntimeProvisioner:
             },
             "honcho_config": build_runtime_honcho_config(
                 settings=self.settings,
-                user_id=team.user_id,
+                user_id=agent.user_id,
                 agent_id=agent.id,
             ),
             "runtime_env": runtime_env or None,
@@ -968,9 +965,6 @@ class GcpFirecrackerRuntimeProvisioner:
         lease: RuntimeLease,
         host_api_base_url: str,
     ) -> GcpFirecrackerMicrovm:
-        team = session.get(Team, agent.team_id)
-        if team is None:
-            raise RuntimeNotReadyError("Agent team is missing; cannot build Honcho workspace identity.")
         host_client = GcpFirecrackerHostClient(settings=self.settings, base_url=host_api_base_url)
         microvm_id = lease.vm_id or build_firecracker_microvm_spec(
             settings=self.settings,
@@ -983,7 +977,7 @@ class GcpFirecrackerRuntimeProvisioner:
             payload={
                 "honcho_config": build_runtime_honcho_config(
                     settings=self.settings,
-                    user_id=team.user_id,
+                    user_id=agent.user_id,
                     agent_id=agent.id,
                 ),
                 "runtime_env": runtime_env or None,

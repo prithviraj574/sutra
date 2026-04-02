@@ -49,9 +49,8 @@ def build_agent_private_volume_path(*, settings: Settings, agent: Agent) -> str:
 
 
 def build_team_shared_workspace_path(*, settings: Settings, agent: Agent) -> str | None:
-    if not agent.shared_workspace_enabled:
-        return None
-    return str(PurePosixPath(settings.gcp_runtime_shared_workspace_root_path) / str(agent.team_id))
+    del settings, agent
+    return None
 
 
 def build_runtime_proxy_base_url(*, host_api_base_url: str, microvm_id: str) -> str:
@@ -84,7 +83,7 @@ def build_firecracker_microvm_spec(
     return FirecrackerMicrovmSpec(
         microvm_id=microvm_id,
         agent_id=str(agent.id),
-        team_id=str(agent.team_id),
+        team_id="none",
         runtime_port=runtime_port,
         proxy_base_url=build_runtime_proxy_base_url(
             host_api_base_url=host_api_base_url,

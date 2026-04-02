@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from sutra_backend.enums import RuntimeLeaseState
+
 
 class RuntimeLeaseRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -14,7 +16,7 @@ class RuntimeLeaseRead(BaseModel):
     vm_id: str
     host_vm_id: str | None = None
     host_api_base_url: str | None = None
-    state: str
+    state: RuntimeLeaseState
     provider: str
     api_base_url: str | None = None
     last_heartbeat_at: datetime | None = None

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Agent, Team } from "../../lib/api";
+import type { Agent, Team } from "../../lib/api.generated";
 import { pickDefaultAgent } from "./defaultAgent";
 
 function buildTeam(overrides: Partial<Team>): Team {
@@ -18,7 +18,8 @@ function buildTeam(overrides: Partial<Team>): Team {
 function buildAgent(overrides: Partial<Agent>): Agent {
   return {
     id: "agent-1",
-    team_id: "team-1",
+    user_id: "user-1",
+    team_ids: ["team-1"],
     name: "Agent",
     role_name: "Generalist",
     status: "provisioning",
@@ -37,8 +38,8 @@ describe("pickDefaultAgent", () => {
       buildTeam({ id: "team-personal", mode: "personal" }),
     ];
     const agents = [
-      buildAgent({ id: "agent-team", team_id: "team-team", status: "ready" }),
-      buildAgent({ id: "agent-personal", team_id: "team-personal", status: "provisioning" }),
+      buildAgent({ id: "agent-team", team_ids: ["team-team"], status: "ready" }),
+      buildAgent({ id: "agent-personal", team_ids: ["team-personal"], status: "provisioning" }),
     ];
 
     expect(pickDefaultAgent(agents, teams)?.id).toBe("agent-personal");
@@ -47,8 +48,8 @@ describe("pickDefaultAgent", () => {
   it("falls back to a ready agent when no personal workspace exists", () => {
     const teams = [buildTeam({ id: "team-team", mode: "team" })];
     const agents = [
-      buildAgent({ id: "agent-pending", team_id: "team-team", status: "provisioning" }),
-      buildAgent({ id: "agent-ready", team_id: "team-team", status: "ready" }),
+      buildAgent({ id: "agent-pending", team_ids: ["team-team"], status: "provisioning" }),
+      buildAgent({ id: "agent-ready", team_ids: ["team-team"], status: "ready" }),
     ];
 
     expect(pickDefaultAgent(agents, teams)?.id).toBe("agent-ready");

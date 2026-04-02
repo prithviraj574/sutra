@@ -3,18 +3,19 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from sutra_backend.auth.dependencies import get_current_user
 from sutra_backend.config import Settings, get_app_settings
 from sutra_backend.db import get_session
-from sutra_backend.models import Agent, Team, User
+from sutra_backend.models import Agent, User
 from sutra_backend.runtime.errors import RuntimeNotReadyError
 from sutra_backend.schemas.catalog import AgentListResponse, AgentRead
 from sutra_backend.schemas.conversations import ConversationListResponse, ConversationRead
 from sutra_backend.schemas.runtime import AgentResponseCreateRequest, AgentResponseCreateResponse
 from sutra_backend.schemas.team_runtime import AgentInboxClaimResponse, AgentInboxRunResponse, TeamTaskListResponse, TeamTaskRead
 from sutra_backend.services.conversations import list_agent_conversations
+from sutra_backend.services.agent_teams import list_owned_agents, list_assignments_for_agents
 from sutra_backend.services.runtime import AgentNotFoundError, run_agent_response
 from sutra_backend.services.secrets import SecretVaultError
 from sutra_backend.services.team_runtime import (
@@ -29,19 +30,52 @@ from sutra_backend.services.team_runtime import (
 agents_router = APIRouter()
 
 
+def _build_agent_read(
+    agent: Agent,
+    *,
+    team_ids: list[UUID],
+    shared_workspace_enabled: bool,
+) -> AgentRead:
+    return AgentRead(
+        id=agent.id,
+        user_id=agent.user_id,
+        team_ids=team_ids,
+        role_template_id=agent.role_template_id,
+        name=agent.name,
+        role_name=agent.role_name,
+        status=agent.status,
+        runtime_kind=agent.runtime_kind,
+        hermes_home_uri=agent.hermes_home_uri,
+        private_volume_uri=agent.private_volume_uri,
+        shared_workspace_enabled=shared_workspace_enabled,
+        created_at=agent.created_at,
+        updated_at=agent.updated_at,
+    )
+
+
 @agents_router.get("/agents", tags=["agents"], response_model=AgentListResponse)
 def list_agents(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ) -> AgentListResponse:
-    statement = (
-        select(Agent)
-        .join(Team, Team.id == Agent.team_id)
-        .where(Team.user_id == user.id)
-        .order_by(Team.mode.asc(), Team.created_at.asc(), Agent.created_at.asc())
+    agents = list_owned_agents(session, user=user)
+    assignments_by_agent = list_assignments_for_agents(
+        session,
+        agent_ids=[agent.id for agent in agents],
     )
-    agents = session.exec(statement).all()
-    return AgentListResponse(items=[AgentRead.model_validate(agent, from_attributes=True) for agent in agents])
+    return AgentListResponse(
+        items=[
+            _build_agent_read(
+                agent,
+                team_ids=[assignment.agent_team_id for assignment in assignments_by_agent.get(agent.id, [])],
+                shared_workspace_enabled=any(
+                    assignment.shared_workspace_enabled
+                    for assignment in assignments_by_agent.get(agent.id, [])
+                ),
+            )
+            for agent in agents
+        ]
+    )
 
 
 @agents_router.get("/agents/{agent_id}/conversations", tags=["agents"], response_model=ConversationListResponse)

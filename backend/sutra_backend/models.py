@@ -3,8 +3,30 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import Index, MetaData, UniqueConstraint
+from enum import StrEnum
+
+from sqlalchemy import Column, Enum as SAEnum, Index, MetaData, UniqueConstraint
 from sqlmodel import Field, SQLModel
+
+from sutra_backend.enums import (
+    AgentStatus,
+    ArtifactKind,
+    ConversationMode,
+    ConversationStatus,
+    GitHubAccountType,
+    MessageActorType,
+    PollerLeaseState,
+    RuntimeKind,
+    RuntimeLeaseState,
+    SecretScope,
+    TeamMode,
+    TeamTaskSource,
+    TeamTaskStatus,
+    TeamTaskUpdateType,
+    ToolEventType,
+    ToolProfile,
+    WorkspaceItemKind,
+)
 
 
 SQLModel.metadata = MetaData(
@@ -16,6 +38,23 @@ SQLModel.metadata = MetaData(
         "pk": "pk_%(table_name)s",
     }
 )
+
+
+def enum_field(enum_cls: type[StrEnum], *, default: StrEnum, index: bool = False) -> object:
+    return Field(
+        default=default,
+        sa_column=Column(
+            SAEnum(
+                enum_cls,
+                values_callable=lambda members: [member.value for member in members],
+                native_enum=False,
+                name=enum_cls.__name__.lower(),
+            ),
+            default=default,
+            nullable=False,
+            index=index,
+        ),
+    )
 
 
 def utcnow() -> datetime:
@@ -38,13 +77,13 @@ class User(TimestampedUUIDModel, table=True):
     photo_url: str | None = Field(default=None)
 
 
-class Team(TimestampedUUIDModel, table=True):
+class AgentTeam(TimestampedUUIDModel, table=True):
     __tablename__ = "teams"
 
     user_id: UUID = Field(foreign_key="users.id", index=True, nullable=False)
     name: str = Field(nullable=False)
     description: str | None = Field(default=None)
-    mode: str = Field(default="personal", index=True, nullable=False)
+    mode: TeamMode = enum_field(TeamMode, default=TeamMode.PERSONAL, index=True)
     shared_workspace_uri: str | None = Field(default=None)
 
 
@@ -56,13 +95,13 @@ class RoleTemplate(TimestampedUUIDModel, table=True):
     name: str = Field(nullable=False)
     description: str | None = Field(default=None)
     default_system_prompt: str = Field(nullable=False)
-    default_tool_profile: str = Field(default="full_web", nullable=False)
+    default_tool_profile: ToolProfile = enum_field(ToolProfile, default=ToolProfile.FULL_WEB)
 
 
 class Agent(TimestampedUUIDModel, table=True):
     __tablename__ = "agents"
 
-    team_id: UUID = Field(foreign_key="teams.id", index=True, nullable=False)
+    user_id: UUID = Field(foreign_key="users.id", index=True, nullable=False)
     role_template_id: UUID | None = Field(
         default=None,
         foreign_key="role_templates.id",
@@ -70,21 +109,31 @@ class Agent(TimestampedUUIDModel, table=True):
     )
     name: str = Field(nullable=False)
     role_name: str = Field(nullable=False)
-    status: str = Field(default="provisioning", index=True, nullable=False)
-    runtime_kind: str = Field(default="firecracker", nullable=False)
+    status: AgentStatus = enum_field(AgentStatus, default=AgentStatus.PROVISIONING, index=True)
+    runtime_kind: RuntimeKind = enum_field(RuntimeKind, default=RuntimeKind.FIRECRACKER)
     hermes_home_uri: str | None = Field(default=None)
     private_volume_uri: str | None = Field(default=None)
+
+
+class AgentTeamAssignment(TimestampedUUIDModel, table=True):
+    __tablename__ = "agent_team_assignments"
+    __table_args__ = (
+        UniqueConstraint("agent_id", "agent_team_id", name="uq_agent_team_assignments_agent_team"),
+    )
+
+    agent_id: UUID = Field(foreign_key="agents.id", index=True, nullable=False)
+    agent_team_id: UUID = Field(foreign_key="teams.id", index=True, nullable=False)
     shared_workspace_enabled: bool = Field(default=True, nullable=False)
 
 
 class Conversation(TimestampedUUIDModel, table=True):
     __tablename__ = "conversations"
 
-    team_id: UUID | None = Field(default=None, foreign_key="teams.id", index=True)
+    agent_team_id: UUID | None = Field(default=None, foreign_key="teams.id", index=True)
     agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
-    mode: str = Field(default="single_agent", index=True, nullable=False)
+    mode: ConversationMode = enum_field(ConversationMode, default=ConversationMode.AGENT, index=True)
     latest_response_id: str | None = Field(default=None)
-    status: str = Field(default="active", index=True, nullable=False)
+    status: ConversationStatus = enum_field(ConversationStatus, default=ConversationStatus.ACTIVE, index=True)
 
 
 class Message(TimestampedUUIDModel, table=True):
@@ -95,7 +144,7 @@ class Message(TimestampedUUIDModel, table=True):
         index=True,
         nullable=False,
     )
-    actor_type: str = Field(default="user", index=True, nullable=False)
+    actor_type: MessageActorType = enum_field(MessageActorType, default=MessageActorType.USER, index=True)
     actor_id: UUID | None = Field(default=None, index=True)
     content: str = Field(nullable=False)
     response_chain_id: str | None = Field(default=None, index=True)
@@ -112,7 +161,7 @@ class ToolEvent(TimestampedUUIDModel, table=True):
     agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
     message_id: UUID | None = Field(default=None, foreign_key="messages.id", index=True)
     tool_name: str = Field(index=True, nullable=False)
-    event_type: str = Field(index=True, nullable=False)
+    event_type: ToolEventType = enum_field(ToolEventType, default=ToolEventType.STARTED, index=True)
     summary: str | None = Field(default=None)
     payload_excerpt: str | None = Field(default=None)
     started_at: datetime | None = Field(default=None)
@@ -130,7 +179,7 @@ class Artifact(TimestampedUUIDModel, table=True):
     )
     agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
     name: str = Field(nullable=False)
-    kind: str = Field(default="document", index=True, nullable=False)
+    kind: ArtifactKind = enum_field(ArtifactKind, default=ArtifactKind.DOCUMENT, index=True)
     uri: str = Field(nullable=False)
     mime_type: str | None = Field(default=None)
     preview_uri: str | None = Field(default=None)
@@ -144,7 +193,7 @@ class SharedWorkspaceItem(TimestampedUUIDModel, table=True):
 
     team_id: UUID = Field(foreign_key="teams.id", index=True, nullable=False)
     path: str = Field(nullable=False)
-    kind: str = Field(default="file", index=True, nullable=False)
+    kind: WorkspaceItemKind = enum_field(WorkspaceItemKind, default=WorkspaceItemKind.FILE, index=True)
     size_bytes: int | None = Field(default=None)
     content_text: str | None = Field(default=None)
     conversation_id: UUID | None = Field(default=None, foreign_key="conversations.id", index=True)
@@ -167,8 +216,8 @@ class TeamTask(TimestampedUUIDModel, table=True):
     )
     title: str = Field(nullable=False)
     instruction: str = Field(nullable=False)
-    status: str = Field(default="open", index=True, nullable=False)
-    source: str = Field(default="huddle", index=True, nullable=False)
+    status: TeamTaskStatus = enum_field(TeamTaskStatus, default=TeamTaskStatus.OPEN, index=True)
+    source: TeamTaskSource = enum_field(TeamTaskSource, default=TeamTaskSource.HUDDLE, index=True)
     claim_token: str | None = Field(default=None, index=True)
     claimed_at: datetime | None = Field(default=None)
     claim_expires_at: datetime | None = Field(default=None, index=True)
@@ -181,7 +230,11 @@ class TeamTaskUpdate(TimestampedUUIDModel, table=True):
     task_id: UUID = Field(foreign_key="team_tasks.id", index=True, nullable=False)
     team_id: UUID = Field(foreign_key="teams.id", index=True, nullable=False)
     agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
-    event_type: str = Field(default="reported", index=True, nullable=False)
+    event_type: TeamTaskUpdateType = enum_field(
+        TeamTaskUpdateType,
+        default=TeamTaskUpdateType.REPORTED,
+        index=True,
+    )
     content: str = Field(nullable=False)
 
 
@@ -193,7 +246,7 @@ class Secret(TimestampedUUIDModel, table=True):
     agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
     name: str = Field(nullable=False)
     provider: str | None = Field(default=None)
-    scope: str = Field(default="user", index=True, nullable=False)
+    scope: SecretScope = enum_field(SecretScope, default=SecretScope.USER, index=True)
     encrypted_value: str = Field(nullable=False)
     last_used_at: datetime | None = Field(default=None)
 
@@ -210,15 +263,15 @@ class GitHubConnection(TimestampedUUIDModel, table=True):
     user_id: UUID = Field(foreign_key="users.id", index=True, nullable=False)
     installation_id: str = Field(nullable=False)
     account_login: str = Field(nullable=False)
-    account_type: str = Field(default="user", nullable=False)
+    account_type: GitHubAccountType = enum_field(GitHubAccountType, default=GitHubAccountType.USER)
     connected_at: datetime = Field(default_factory=utcnow, nullable=False)
 
 
 class AutomationJob(TimestampedUUIDModel, table=True):
     __tablename__ = "automation_jobs"
 
-    team_id: UUID | None = Field(default=None, foreign_key="teams.id", index=True)
-    agent_id: UUID | None = Field(default=None, foreign_key="agents.id", index=True)
+    agent_id: UUID = Field(foreign_key="agents.id", index=True, nullable=False)
+    agent_team_id: UUID | None = Field(default=None, foreign_key="teams.id", index=True)
     name: str = Field(nullable=False)
     schedule: str = Field(nullable=False)
     prompt: str = Field(nullable=False)
@@ -238,7 +291,11 @@ class RuntimeLease(TimestampedUUIDModel, table=True):
     vm_id: str = Field(nullable=False)
     host_vm_id: str | None = Field(default=None, index=True)
     host_api_base_url: str | None = Field(default=None)
-    state: str = Field(default="provisioning", index=True, nullable=False)
+    state: RuntimeLeaseState = enum_field(
+        RuntimeLeaseState,
+        default=RuntimeLeaseState.PROVISIONING,
+        index=True,
+    )
     api_base_url: str | None = Field(default=None)
     last_heartbeat_at: datetime | None = Field(default=None)
     started_at: datetime | None = Field(default=None)
@@ -252,7 +309,7 @@ class PollerLease(TimestampedUUIDModel, table=True):
 
     name: str = Field(nullable=False, index=True)
     owner_id: str | None = Field(default=None, index=True)
-    state: str = Field(default="idle", index=True, nullable=False)
+    state: PollerLeaseState = enum_field(PollerLeaseState, default=PollerLeaseState.IDLE, index=True)
     last_heartbeat_at: datetime | None = Field(default=None)
     lease_expires_at: datetime | None = Field(default=None)
     last_sweep_started_at: datetime | None = Field(default=None)

@@ -17,7 +17,7 @@ def test_build_firecracker_microvm_spec_keeps_private_paths_isolated() -> None:
         gcp_runtime_host_microvm_base_port=10080,
     )
     agent = Agent(
-        team_id=uuid4(),
+        user_id=uuid4(),
         name="Research Agent",
         role_name="Researcher",
     )
@@ -34,10 +34,4 @@ def test_build_firecracker_microvm_spec_keeps_private_paths_isolated() -> None:
     assert spec.storage.private_root == f"/mnt/sutra/state/agents/{agent.id}"
     assert spec.storage.hermes_home_path == f"/mnt/sutra/state/agents/{agent.id}/hermes-home"
     assert spec.storage.private_volume_path == f"/mnt/sutra/state/agents/{agent.id}/private-volume"
-    assert spec.storage.shared_workspace_path == f"/mnt/sutra/shared-workspaces/{agent.team_id}"
-    assert PurePosixPath(spec.storage.shared_workspace_path) not in PurePosixPath(
-        spec.storage.hermes_home_path
-    ).parents
-    assert PurePosixPath(spec.storage.shared_workspace_path) not in PurePosixPath(
-        spec.storage.private_volume_path
-    ).parents
+    assert spec.storage.shared_workspace_path is None

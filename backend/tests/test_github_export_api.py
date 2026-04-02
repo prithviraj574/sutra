@@ -12,7 +12,7 @@ from sutra_backend.auth import dependencies as auth_dependencies
 from sutra_backend.config import Settings
 from sutra_backend.db import create_database_engine, get_session
 from sutra_backend.main import create_app
-from sutra_backend.models import GitHubConnection, SharedWorkspaceItem, Team, User
+from sutra_backend.models import AgentTeam, GitHubConnection, SharedWorkspaceItem, User
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ def test_github_repository_listing_and_workspace_export(monkeypatch) -> None:
     user_payload = authenticate(client, monkeypatch)
     user = session.exec(select(User).where(User.id == UUID(user_payload["id"]))).one()
 
-    team = Team(user_id=user.id, name="Launch Crew", mode="team", shared_workspace_uri="workspace://teams/team-1")
+    team = AgentTeam(user_id=user.id, name="Launch Crew", mode="team", shared_workspace_uri="workspace://teams/team-1")
     session.add(team)
     session.commit()
     session.refresh(team)

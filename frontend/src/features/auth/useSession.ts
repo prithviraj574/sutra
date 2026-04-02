@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { createApiClient } from "../../lib/api";
+import { createApiClient } from "../../lib/api.generated";
 import { readFrontendEnv } from "../../lib/env";
 import { useAuth } from "./AuthProvider";
 
@@ -25,7 +25,7 @@ export function useBackendSession() {
 
   return useQuery({
     queryKey: ["backend-session", auth.user?.uid, auth.tokenVersion],
-    queryFn: () => api.readSession(),
+    queryFn: () => api.readCurrentUser(),
     enabled: !!auth.user && !auth.loading,
   });
 }

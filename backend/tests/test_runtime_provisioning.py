@@ -7,7 +7,7 @@ from sqlmodel import Session, SQLModel, select
 
 from sutra_backend.config import Settings
 from sutra_backend.db import create_database_engine
-from sutra_backend.models import Agent, RoleTemplate, RuntimeLease, Team, User
+from sutra_backend.models import Agent, AgentTeam, RoleTemplate, RuntimeLease, User
 from sutra_backend.runtime.errors import RuntimeNotReadyError
 from sutra_backend.runtime.honcho import (
     build_honcho_agent_peer_name,
@@ -127,13 +127,13 @@ def test_runtime_provisioner_creates_local_dev_lease_when_missing() -> None:
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="My Workspace", mode="personal")
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -183,13 +183,13 @@ def test_runtime_provisioner_reuses_existing_lease() -> None:
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="My Workspace", mode="personal")
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -260,13 +260,13 @@ def test_runtime_provisioner_replaces_existing_lease_when_provider_changes(monke
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="My Workspace", mode="personal")
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -324,13 +324,13 @@ def test_runtime_provisioner_restarts_existing_local_dev_lease() -> None:
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="My Workspace", mode="personal")
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -389,13 +389,13 @@ def test_runtime_provisioner_can_surface_unconfigured_gcp_provider() -> None:
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="My Workspace", mode="personal")
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -508,7 +508,7 @@ def test_runtime_provisioner_creates_gcp_firecracker_lease_and_agent_storage(
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(
+        team = AgentTeam(
             user_id=user.id,
             name="My Workspace",
             mode="personal",
@@ -519,7 +519,7 @@ def test_runtime_provisioner_creates_gcp_firecracker_lease_and_agent_storage(
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -671,13 +671,13 @@ def test_runtime_provisioner_builds_per_user_honcho_config_for_microvm(
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="My Workspace", mode="personal")
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -811,13 +811,13 @@ def test_runtime_provisioner_supports_image_family_and_runtime_bundle(monkeypatc
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="Runtime Team", mode="personal")
+        team = AgentTeam(user_id=user.id, name="Runtime Team", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Runtime Agent",
             role_name="Researcher",
@@ -898,7 +898,7 @@ def test_runtime_provisioner_restarts_gcp_microvm_without_changing_private_stora
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(
+        team = AgentTeam(
             user_id=user.id,
             name="Restart Team",
             mode="personal",
@@ -909,7 +909,7 @@ def test_runtime_provisioner_restarts_gcp_microvm_without_changing_private_stora
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Restart Agent",
             role_name="Executor",
@@ -961,7 +961,7 @@ def test_runtime_provisioner_restarts_gcp_microvm_without_changing_private_stora
         assert agent.private_volume_uri == f"gs://sutra-runtime/agents/{agent.id}/private-volume"
 
 
-def test_runtime_provisioner_rejects_overlapping_shared_workspace_path() -> None:
+def test_runtime_provisioner_does_not_attach_a_default_shared_workspace_path() -> None:
     provisioner = GcpFirecrackerRuntimeProvisioner(
         Settings(
             app_env="test",
@@ -979,14 +979,9 @@ def test_runtime_provisioner_rejects_overlapping_shared_workspace_path() -> None
         )
     )
 
-    agent = Agent(team_id=uuid4(), name="Agent", role_name="Role")
-
-    try:
-        provisioner._build_storage_spec(agent)
-    except RuntimeNotReadyError as exc:
-        assert "Shared workspace path must not live under the private state mount." == str(exc)
-    else:
-        raise AssertionError("Expected overlapping shared workspace path to be rejected.")
+    agent = Agent(user_id=uuid4(), name="Agent", role_name="Role")
+    storage_spec = provisioner._build_storage_spec(agent)
+    assert storage_spec.shared_workspace_path is None
 
 
 def test_runtime_provisioner_prefers_host_api_override_base_url() -> None:

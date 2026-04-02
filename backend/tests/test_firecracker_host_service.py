@@ -31,7 +31,7 @@ def _settings(tmp_path: Path, *, firecracker_execute: bool = False) -> Settings:
 
 
 def _provision_payload(settings: Settings) -> dict[str, object]:
-    agent = Agent(team_id=uuid4(), name="Host Agent", role_name="Operator")
+    agent = Agent(user_id=uuid4(), name="Host Agent", role_name="Operator")
     spec = build_firecracker_microvm_spec(
         settings=settings,
         agent=agent,
@@ -123,7 +123,7 @@ def test_firecracker_host_service_provisions_process_microvm_and_writes_record(
     for key in ("private_root", "hermes_home_path", "private_volume_path"):
         mode = Path(str(payload["storage"][key])).stat().st_mode & 0o777
         assert mode == 0o700
-    assert Path(str(payload["storage"]["shared_workspace_path"])).exists()
+    assert payload["storage"]["shared_workspace_path"] is None
 
 
 def test_firecracker_host_service_restart_preserves_microvm_identity(

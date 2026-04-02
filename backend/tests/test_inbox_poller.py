@@ -12,7 +12,7 @@ from sutra_backend.auth import dependencies as auth_dependencies
 from sutra_backend.config import Settings
 from sutra_backend.db import create_database_engine
 from sutra_backend.main import create_app
-from sutra_backend.models import PollerLease, Team, TeamTask, utcnow
+from sutra_backend.models import AgentTeam, PollerLease, TeamTask, utcnow
 from sutra_backend.services import team_runtime as team_runtime_service
 from sutra_backend.services.inbox_poller import read_inbox_poller_status, run_inbox_poller_sweep
 from sutra_backend.runtime.client import HermesResponse
@@ -130,7 +130,7 @@ async def test_inbox_poller_sweep_runs_pending_team_tasks(monkeypatch) -> None:
     )
     assert executed_count == 2
 
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
     tasks = session.exec(select(TeamTask).where(TeamTask.team_id == team.id)).all()
     assert len(tasks) == 2
     assert all(task.status == "completed" for task in tasks)
@@ -279,7 +279,7 @@ async def test_inbox_poller_sweep_respects_max_tasks_per_sweep(monkeypatch) -> N
     )
     assert executed_count == 1
 
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
     tasks = session.exec(select(TeamTask).where(TeamTask.team_id == team.id)).all()
     completed = [task for task in tasks if task.status == "completed"]
     open_tasks = [task for task in tasks if task.status == "open"]

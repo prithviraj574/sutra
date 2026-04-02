@@ -11,11 +11,11 @@ from sqlmodel import Session, select
 from sutra_backend.config import Settings
 from sutra_backend.models import (
     Agent,
+    AgentTeam,
     Conversation,
     Message,
     RoleTemplate,
     SharedWorkspaceItem,
-    Team,
     TeamTask,
     TeamTaskUpdate,
     User,
@@ -24,6 +24,12 @@ from sutra_backend.models import (
 from sutra_backend.runtime.client import HermesRuntimeClient, ResponsesRequest
 from sutra_backend.runtime.errors import RuntimeNotReadyError
 from sutra_backend.runtime.provisioning import ensure_agent_runtime_lease
+from sutra_backend.services.agent_teams import (
+    get_owned_agent as find_owned_agent,
+    get_owned_team as find_owned_team,
+    get_team_assignment,
+    list_team_agents,
+)
 from sutra_backend.services.runtime import AgentNotFoundError, build_runtime_target
 from sutra_backend.services.runtime_leases import reconcile_runtime_lease
 from sutra_backend.services.secrets import resolve_secret_env
@@ -93,8 +99,8 @@ def _build_team_runtime_conversation_name(
     task: TeamTask | None = None,
 ) -> str:
     if task is not None:
-        return f"{mode}:team:{conversation.team_id}:task:{task.id}:agent:{agent.id}"
-    return f"{mode}:team:{conversation.team_id}:conversation:{conversation.id}:agent:{agent.id}"
+        return f"{mode}:team:{conversation.agent_team_id}:task:{task.id}:agent:{agent.id}"
+    return f"{mode}:team:{conversation.agent_team_id}:conversation:{conversation.id}:agent:{agent.id}"
 
 
 def _serialize_user_input(raw_input: str | list[dict[str, object]]) -> str:
@@ -110,10 +116,8 @@ def _truncate_context(text: str, *, limit: int) -> str:
     return normalized[: max(limit - 16, 0)].rstrip() + "\n...[truncated]"
 
 
-def get_owned_team(session: Session, *, team_id: UUID, user: User) -> Team:
-    team = session.exec(
-        select(Team).where(Team.id == team_id).where(Team.user_id == user.id)
-    ).first()
+def get_owned_team(session: Session, *, team_id: UUID, user: User) -> AgentTeam:
+    team = find_owned_team(session, team_id=team_id, user=user)
     if team is None:
         raise AgentNotFoundError("Team not found.")
     return team
@@ -122,21 +126,21 @@ def get_owned_team(session: Session, *, team_id: UUID, user: User) -> Team:
 def get_or_create_team_conversation(
     session: Session,
     *,
-    team: Team,
+    team: AgentTeam,
     conversation_id: UUID | None,
 ) -> Conversation:
     if conversation_id is not None:
         conversation = session.exec(
             select(Conversation)
             .where(Conversation.id == conversation_id)
-            .where(Conversation.team_id == team.id)
+            .where(Conversation.agent_team_id == team.id)
             .where(Conversation.mode == "team")
         ).first()
         if conversation is None:
             raise AgentNotFoundError("Conversation not found.")
         return conversation
 
-    conversation = Conversation(team_id=team.id, mode="team")
+    conversation = Conversation(agent_team_id=team.id, mode="team")
     session.add(conversation)
     session.commit()
     session.refresh(conversation)
@@ -146,21 +150,21 @@ def get_or_create_team_conversation(
 def get_or_create_team_huddle_conversation(
     session: Session,
     *,
-    team: Team,
+    team: AgentTeam,
     conversation_id: UUID | None,
 ) -> Conversation:
     if conversation_id is not None:
         conversation = session.exec(
             select(Conversation)
             .where(Conversation.id == conversation_id)
-            .where(Conversation.team_id == team.id)
+            .where(Conversation.agent_team_id == team.id)
             .where(Conversation.mode == "team_huddle")
         ).first()
         if conversation is None:
             raise AgentNotFoundError("Huddle not found.")
         return conversation
 
-    conversation = Conversation(team_id=team.id, mode="team_huddle")
+    conversation = Conversation(agent_team_id=team.id, mode="team_huddle")
     session.add(conversation)
     session.commit()
     session.refresh(conversation)
@@ -188,15 +192,17 @@ def list_agent_inbox_tasks(
     user: User,
     agent_id: UUID,
 ) -> list[TeamTask]:
-    agent = session.exec(
-        select(Agent)
-        .join(Team, Team.id == Agent.team_id)
-        .where(Agent.id == agent_id)
-        .where(Team.user_id == user.id)
-    ).first()
+    agent = find_owned_agent(session, agent_id=agent_id, user=user)
     if agent is None:
         raise AgentNotFoundError("Agent not found.")
-    recover_expired_team_task_claims(session, user=user, team_id=agent.team_id)
+
+    assigned_tasks = session.exec(
+        select(TeamTask)
+        .where(TeamTask.assigned_agent_id == agent.id)
+        .order_by(TeamTask.created_at.asc())
+    ).all()
+    for team_id in {task.team_id for task in assigned_tasks}:
+        recover_expired_team_task_claims(session, user=user, team_id=team_id)
 
     return session.exec(
         select(TeamTask)
@@ -211,12 +217,7 @@ def _get_owned_agent(
     agent_id: UUID,
     user: User,
 ) -> Agent:
-    agent = session.exec(
-        select(Agent)
-        .join(Team, Team.id == Agent.team_id)
-        .where(Agent.id == agent_id)
-        .where(Team.user_id == user.id)
-    ).first()
+    agent = find_owned_agent(session, agent_id=agent_id, user=user)
     if agent is None:
         raise AgentNotFoundError("Agent not found.")
     return agent
@@ -230,9 +231,9 @@ def _get_owned_task(
 ) -> TeamTask:
     task = session.exec(
         select(TeamTask)
-        .join(Team, Team.id == TeamTask.team_id)
+        .join(AgentTeam, AgentTeam.id == TeamTask.team_id)
         .where(TeamTask.id == task_id)
-        .where(Team.user_id == user.id)
+        .where(AgentTeam.user_id == user.id)
     ).first()
     if task is None:
         raise AgentNotFoundError("Task not found.")
@@ -256,11 +257,9 @@ def list_task_updates(
 def _load_team_agents_and_templates(
     session: Session,
     *,
-    team: Team,
+    team: AgentTeam,
 ) -> tuple[list[Agent], dict[UUID, RoleTemplate]]:
-    agents = session.exec(
-        select(Agent).where(Agent.team_id == team.id).order_by(Agent.created_at.asc())
-    ).all()
+    agents = list_team_agents(session, team_id=team.id)
     if not agents:
         raise AgentNotFoundError("Team does not have any agents.")
 
@@ -288,7 +287,7 @@ def _load_role_template_for_agent(
 
 def _build_agent_huddle_input(
     *,
-    team: Team,
+    team: AgentTeam,
     user_input: str | list[dict[str, object]],
     prior_outputs: list[TeamMemberResponse],
 ) -> str:
@@ -315,7 +314,7 @@ def _build_agent_huddle_input(
 
 def _build_agent_team_input(
     *,
-    team: Team,
+    team: AgentTeam,
     user_input: str | list[dict[str, object]],
     prior_outputs: list[TeamMemberResponse],
     assigned_task: TeamTask | None,
@@ -379,7 +378,7 @@ def _build_agent_team_input(
 
 def _build_agent_inbox_task_input(
     *,
-    team: Team,
+    team: AgentTeam,
     task: TeamTask,
     updates: list[TeamTaskUpdate],
     update_agents: dict[UUID, Agent],
@@ -432,7 +431,7 @@ def _build_agent_inbox_task_input(
 
 def _build_agent_instructions(
     *,
-    team: Team,
+    team: AgentTeam,
     role_template: RoleTemplate | None,
     override: str | None,
 ) -> str:
@@ -450,7 +449,7 @@ def _build_agent_instructions(
 
 def _build_agent_huddle_instructions(
     *,
-    team: Team,
+    team: AgentTeam,
     role_template: RoleTemplate | None,
     override: str | None,
 ) -> str:
@@ -468,7 +467,7 @@ def _build_agent_huddle_instructions(
 
 def _build_agent_inbox_instructions(
     *,
-    team: Team,
+    team: AgentTeam,
     role_template: RoleTemplate | None,
 ) -> str:
     parts = []
@@ -505,7 +504,7 @@ def _workspace_team_agent_output_path(
 def _load_huddle_plan_item(
     session: Session,
     *,
-    team: Team,
+    team: AgentTeam,
     conversation_id: UUID | None,
 ) -> SharedWorkspaceItem | None:
     statement = (
@@ -524,7 +523,7 @@ def _load_huddle_plan_item(
 def _load_recent_workspace_context(
     session: Session,
     *,
-    team: Team,
+    team: AgentTeam,
     exclude_paths: set[str] | None = None,
     preferred_prefixes: list[str] | None = None,
     limit: int = WORKSPACE_CONTEXT_ITEM_LIMIT,
@@ -561,7 +560,7 @@ def _load_recent_workspace_context(
 def _load_conversation_workspace_prefixes(
     session: Session,
     *,
-    team: Team,
+    team: AgentTeam,
     conversation: Conversation,
 ) -> list[str]:
     prefixes: list[str] = []
@@ -603,9 +602,9 @@ def _format_workspace_context(items: list[SharedWorkspaceItem]) -> str:
 def _load_team_agent_map(
     session: Session,
     *,
-    team: Team,
+    team: AgentTeam,
 ) -> dict[UUID, Agent]:
-    agents = session.exec(select(Agent).where(Agent.team_id == team.id)).all()
+    agents = list_team_agents(session, team_id=team.id)
     return {agent.id: agent for agent in agents}
 
 
@@ -624,7 +623,7 @@ def _format_task_update(
 
 def _build_workspace_summary(
     *,
-    team: Team,
+    team: AgentTeam,
     user_input: str | list[dict[str, object]],
     outputs: list[TeamMemberResponse],
 ) -> str:
@@ -650,7 +649,7 @@ def _build_workspace_summary(
 
 def _build_workspace_huddle_plan(
     *,
-    team: Team,
+    team: AgentTeam,
     user_input: str | list[dict[str, object]],
     outputs: list[TeamMemberResponse],
     tasks: list[TeamTask],
@@ -687,7 +686,7 @@ def _build_workspace_huddle_plan(
 
 def _build_workspace_task_output(
     *,
-    team: Team,
+    team: AgentTeam,
     agent: Agent,
     task: TeamTask,
     output_text: str,
@@ -712,7 +711,7 @@ def _build_workspace_task_output(
 
 def _build_workspace_team_agent_output(
     *,
-    team: Team,
+    team: AgentTeam,
     agent: Agent,
     user_input: str | list[dict[str, object]],
     assigned_task: TeamTask | None,
@@ -751,7 +750,7 @@ def _build_workspace_team_agent_output(
 def _upsert_task_for_agent(
     session: Session,
     *,
-    team: Team,
+    team: AgentTeam,
     conversation: Conversation,
     agent: Agent,
     instruction: str,
@@ -977,11 +976,9 @@ def delegate_task(
     if task.status == "completed":
         raise TeamTaskActionError("Completed tasks cannot be delegated.")
 
-    agent = session.exec(
-        select(Agent)
-        .where(Agent.id == assigned_agent_id)
-        .where(Agent.team_id == task.team_id)
-    ).first()
+    agent = session.get(Agent, assigned_agent_id)
+    if agent is not None and get_team_assignment(session, team_id=task.team_id, agent_id=agent.id) is None:
+        agent = None
     if agent is None:
         raise TeamTaskActionError("Assigned agent must belong to the same team.")
 
@@ -1024,11 +1021,9 @@ def create_task_report(
 
     report_agent_id = agent_id
     if report_agent_id is not None:
-        agent = session.exec(
-            select(Agent)
-            .where(Agent.id == report_agent_id)
-            .where(Agent.team_id == task.team_id)
-        ).first()
+        agent = session.get(Agent, report_agent_id)
+        if agent is not None and get_team_assignment(session, team_id=task.team_id, agent_id=agent.id) is None:
+            agent = None
         if agent is None:
             raise TeamTaskActionError("Report agent must belong to the same team.")
 
@@ -1067,11 +1062,9 @@ def create_task_message(
 
     message_agent_id = agent_id
     if message_agent_id is not None:
-        agent = session.exec(
-            select(Agent)
-            .where(Agent.id == message_agent_id)
-            .where(Agent.team_id == task.team_id)
-        ).first()
+        agent = session.get(Agent, message_agent_id)
+        if agent is not None and get_team_assignment(session, team_id=task.team_id, agent_id=agent.id) is None:
+            agent = None
         if agent is None:
             raise TeamTaskActionError("Message agent must belong to the same team.")
 
@@ -1138,7 +1131,7 @@ async def run_next_agent_inbox_task(
             workspace_item_id=None,
         )
 
-    team = get_owned_team(session, team_id=agent.team_id, user=user)
+    team = get_owned_team(session, team_id=task.team_id, user=user)
     role_template = _load_role_template_for_agent(session, agent=agent)
     updates = list_task_updates(session, user=user, task_id=task.id)
     update_agents = _load_team_agent_map(session, team=team)
@@ -1162,7 +1155,7 @@ async def run_next_agent_inbox_task(
         timeout_seconds=settings.hermes_api_route_timeout_seconds,
     )
 
-    conversation = Conversation(team_id=agent.team_id, agent_id=agent.id, mode="agent_task")
+    conversation = Conversation(agent_team_id=team.id, agent_id=agent.id, mode="team_member")
     session.add(conversation)
     session.commit()
     session.refresh(conversation)
@@ -1313,11 +1306,9 @@ def complete_task(
         raise TeamTaskActionError("Completion content is required.")
 
     if agent_id is not None:
-        agent = session.exec(
-            select(Agent)
-            .where(Agent.id == agent_id)
-            .where(Agent.team_id == task.team_id)
-        ).first()
+        agent = session.get(Agent, agent_id)
+        if agent is not None and get_team_assignment(session, team_id=task.team_id, agent_id=agent.id) is None:
+            agent = None
         if agent is None:
             raise TeamTaskActionError("Completion agent must belong to the same team.")
         if agent.id != task.assigned_agent_id:
@@ -1335,7 +1326,7 @@ def complete_task(
 def _load_latest_active_tasks_by_agent(
     session: Session,
     *,
-    team: Team,
+    team: AgentTeam,
 ) -> dict[UUID, TeamTask]:
     tasks = session.exec(
         select(TeamTask)

@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { RoleTemplate } from "../../lib/api";
+import type { RoleTemplate } from "../../lib/api.generated";
 import { useApiClient, useBackendSession } from "../auth/useSession";
 
 const DEFAULT_ROLE_KEYS = ["planner", "researcher", "builder"];
@@ -30,7 +30,7 @@ export function TeamAssemblyPage() {
 
   const templates = useQuery({
     queryKey: ["role-templates", session.data?.user.id],
-    queryFn: () => api.listRoleTemplates(),
+    queryFn: () => api.getRoleTemplates(),
     enabled: !!session.data,
   });
 
@@ -54,7 +54,7 @@ export function TeamAssemblyPage() {
       name: string;
       description?: string;
       agents: Array<{ role_template_key: string }>;
-    }) => api.createTeam(payload),
+    }) => api.createTeam({ body: payload }),
   });
 
   function toggleRole(key: string) {

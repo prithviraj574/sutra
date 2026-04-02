@@ -11,7 +11,7 @@ from sutra_backend.auth import dependencies as auth_dependencies
 from sutra_backend.config import Settings
 from sutra_backend.db import create_database_engine, get_session
 from sutra_backend.main import create_app
-from sutra_backend.models import Agent, RuntimeLease, Team, utcnow
+from sutra_backend.models import Agent, AgentTeam, RuntimeLease, utcnow
 from sutra_backend.runtime.client import RuntimeHealthProbe
 
 
@@ -470,10 +470,8 @@ def test_runtime_route_reports_isolation_failure_when_sibling_storage_collides(m
     )
     assert provision_response.status_code == 200
 
-    team = session.get(Team, agent.team_id)
-    assert team is not None
     sibling = Agent(
-        team_id=team.id,
+        user_id=agent.user_id,
         name="Sibling Agent",
         role_name="Researcher",
         hermes_home_uri=f"local://agents/{agent.id}/different-hermes-home",

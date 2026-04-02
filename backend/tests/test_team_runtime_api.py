@@ -12,7 +12,7 @@ from sutra_backend.auth import dependencies as auth_dependencies
 from sutra_backend.config import Settings
 from sutra_backend.db import create_database_engine, get_session
 from sutra_backend.main import create_app
-from sutra_backend.models import Agent, SharedWorkspaceItem, Team, TeamTask, utcnow
+from sutra_backend.models import Agent, AgentTeam, SharedWorkspaceItem, TeamTask, utcnow
 from sutra_backend.runtime.client import HermesResponse
 from sutra_backend.services import team_runtime as team_runtime_service
 
@@ -79,7 +79,7 @@ def test_team_response_runs_each_agent_and_writes_workspace_summary(monkeypatch)
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     response_ids = iter(["resp_planner", "resp_researcher"])
 
@@ -257,7 +257,7 @@ def test_team_response_uses_open_huddle_tasks_and_marks_them_completed(monkeypat
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 
@@ -350,7 +350,7 @@ def test_team_response_releases_claimed_tasks_after_runtime_failure(monkeypatch)
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 
@@ -463,7 +463,7 @@ def test_team_response_writes_per_agent_outputs_into_workspace(monkeypatch) -> N
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 
@@ -562,7 +562,7 @@ def test_team_response_prioritizes_previous_conversation_outputs_in_workspace_co
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 
@@ -751,7 +751,7 @@ def test_team_response_claims_tasks_before_agent_execution(monkeypatch) -> None:
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 
@@ -941,7 +941,7 @@ def test_team_response_includes_huddle_plan_and_shared_workspace_context(monkeyp
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 
