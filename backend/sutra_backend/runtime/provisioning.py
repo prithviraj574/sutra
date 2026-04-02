@@ -12,7 +12,7 @@ import httpx
 from sqlmodel import Session, select
 
 from sutra_backend.config import BACKEND_ROOT, Settings
-from sutra_backend.models import Agent, RuntimeLease, Team, utcnow
+from sutra_backend.models import Agent, RuntimeLease, utcnow
 from sutra_backend.runtime.errors import RuntimeNotReadyError
 from sutra_backend.runtime.firecracker_host import (
     build_agent_hermes_home_path,
@@ -20,6 +20,8 @@ from sutra_backend.runtime.firecracker_host import (
     build_firecracker_microvm_spec,
     build_team_shared_workspace_path,
 )
+from sutra_backend.runtime.honcho import build_runtime_honcho_config
+from sutra_backend.runtime.managed_env import build_managed_runtime_env
 
 
 class RuntimeProvisioner(Protocol):
@@ -305,9 +307,18 @@ class GcpFirecrackerHostClient:
         )
 
     def restart_microvm(self, *, microvm_id: str) -> GcpFirecrackerMicrovm:
+        return self.restart_microvm_with_payload(microvm_id=microvm_id, payload=None)
+
+    def restart_microvm_with_payload(
+        self,
+        *,
+        microvm_id: str,
+        payload: dict[str, object] | None,
+    ) -> GcpFirecrackerMicrovm:
         response = httpx.post(
             f"{self.base_url.rstrip('/')}/microvms/{microvm_id}/restart",
             headers=self._headers(),
+            json=payload,
             timeout=60.0,
         )
         response.raise_for_status()
@@ -810,7 +821,7 @@ class GcpFirecrackerRuntimeProvisioner:
                     f"python3 -m venv {shlex.quote(python_venv_path)}",
                     f"{shlex.quote(python_venv_path)}/bin/pip install --upgrade pip",
                     f"cd {shlex.quote(gateway_workdir)}",
-                    f"{shlex.quote(python_venv_path)}/bin/pip install -r requirements.txt fastapi pydantic-settings uvicorn sqlmodel",
+                    f"{shlex.quote(python_venv_path)}/bin/pip install -r requirements.txt fastapi pydantic-settings uvicorn sqlmodel 'honcho-ai>=2.0.1,<3' 'anthropic>=0.39.0'",
                 ]
             )
         lines.extend(
@@ -923,6 +934,7 @@ class GcpFirecrackerRuntimeProvisioner:
             agent=agent,
             host_api_base_url=host_api_base_url,
         )
+        runtime_env = build_managed_runtime_env(self.settings)
         microvm = host_client.provision_microvm(payload={
             "microvm_id": spec.microvm_id,
             "agent_id": spec.agent_id,
@@ -936,6 +948,12 @@ class GcpFirecrackerRuntimeProvisioner:
                 "private_volume_path": spec.storage.private_volume_path,
                 "shared_workspace_path": spec.storage.shared_workspace_path,
             },
+            "honcho_config": build_runtime_honcho_config(
+                settings=self.settings,
+                user_id=agent.user_id,
+                agent_id=agent.id,
+            ),
+            "runtime_env": runtime_env or None,
         })
         return microvm
 
@@ -953,7 +971,18 @@ class GcpFirecrackerRuntimeProvisioner:
             agent=agent,
             host_api_base_url=host_api_base_url,
         ).microvm_id
-        return host_client.restart_microvm(microvm_id=microvm_id)
+        runtime_env = build_managed_runtime_env(self.settings)
+        return host_client.restart_microvm_with_payload(
+            microvm_id=microvm_id,
+            payload={
+                "honcho_config": build_runtime_honcho_config(
+                    settings=self.settings,
+                    user_id=agent.user_id,
+                    agent_id=agent.id,
+                ),
+                "runtime_env": runtime_env or None,
+            },
+        )
 
 
 def get_runtime_provisioner(settings: Settings) -> RuntimeProvisioner:
@@ -964,20 +993,56 @@ def get_runtime_provisioner(settings: Settings) -> RuntimeProvisioner:
     raise RuntimeNotReadyError(f"Unsupported runtime provider: {settings.runtime_provider}")
 
 
+def _infer_lease_provider(lease: RuntimeLease) -> str:
+    if lease.vm_id.startswith("local-dev-"):
+        return "static_dev"
+    return "gcp_firecracker"
+
+
+def _provider_matches_existing_lease(*, lease: RuntimeLease, settings: Settings) -> bool:
+    return _infer_lease_provider(lease) == settings.runtime_provider
+
+
+def sync_runtime_lease_with_settings(*, lease: RuntimeLease, settings: Settings) -> bool:
+    changed = False
+
+    if _infer_lease_provider(lease) == "static_dev":
+        desired_base_url = settings.dev_runtime_base_url
+        if desired_base_url and lease.api_base_url != desired_base_url:
+            lease.api_base_url = desired_base_url
+            changed = True
+        if lease.host_vm_id is not None:
+            lease.host_vm_id = None
+            changed = True
+        if lease.host_api_base_url is not None:
+            lease.host_api_base_url = None
+            changed = True
+
+    if changed:
+        lease.updated_at = utcnow()
+
+    return changed
+
+
 def ensure_agent_runtime_lease(session: Session, *, agent: Agent, settings: Settings) -> RuntimeLease:
     existing_lease = session.exec(select(RuntimeLease).where(RuntimeLease.agent_id == agent.id)).first()
     if existing_lease is not None:
-        if existing_lease.state == "running" and existing_lease.started_at is None:
-            existing_lease.started_at = utcnow()
-        if existing_lease.state == "running":
-            existing_lease.last_heartbeat_at = utcnow()
-            if agent.status != "ready":
-                agent.status = "ready"
-                session.add(agent)
-            session.add(existing_lease)
+        if not _provider_matches_existing_lease(lease=existing_lease, settings=settings):
+            session.delete(existing_lease)
             session.commit()
-            session.refresh(existing_lease)
-        return existing_lease
+        else:
+            sync_runtime_lease_with_settings(lease=existing_lease, settings=settings)
+            if existing_lease.state == "running" and existing_lease.started_at is None:
+                existing_lease.started_at = utcnow()
+            if existing_lease.state == "running":
+                existing_lease.last_heartbeat_at = utcnow()
+                if agent.status != "ready":
+                    agent.status = "ready"
+                    session.add(agent)
+                session.add(existing_lease)
+                session.commit()
+                session.refresh(existing_lease)
+            return existing_lease
 
     provisioner = get_runtime_provisioner(settings)
     return provisioner.ensure_lease(session, agent=agent)
@@ -992,5 +1057,9 @@ def restart_agent_runtime_lease(
     existing_lease = session.exec(select(RuntimeLease).where(RuntimeLease.agent_id == agent.id)).first()
     provisioner = get_runtime_provisioner(settings)
     if existing_lease is None:
+        return provisioner.ensure_lease(session, agent=agent)
+    if not _provider_matches_existing_lease(lease=existing_lease, settings=settings):
+        session.delete(existing_lease)
+        session.commit()
         return provisioner.ensure_lease(session, agent=agent)
     return provisioner.restart_lease(session, agent=agent, lease=existing_lease)

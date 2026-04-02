@@ -5,7 +5,11 @@ from uuid import UUID
 
 from sqlmodel import Session, select
 
-from sutra_backend.models import Agent, Artifact, RoleTemplate, SharedWorkspaceItem, Team, User, utcnow
+from sutra_backend.config import Settings
+from sutra_backend.models import Agent, AgentTeam, Artifact, RoleTemplate, SharedWorkspaceItem, User, utcnow
+from sutra_backend.runtime.errors import RuntimeNotReadyError
+from sutra_backend.runtime.provisioning import ensure_agent_runtime_lease
+from sutra_backend.services.agent_teams import create_team_assignment
 from sutra_backend.services.bootstrap import ensure_role_templates
 
 
@@ -21,19 +25,19 @@ class TeamCreationSpec:
 
 @dataclass(frozen=True)
 class TeamCreationResult:
-    team: Team
+    team: AgentTeam
     agents: list[Agent]
 
 
 @dataclass(frozen=True)
 class TeamWorkspaceResult:
-    team: Team
+    team: AgentTeam
     items: list[SharedWorkspaceItem]
 
 
 @dataclass(frozen=True)
 class TeamArtifactResult:
-    team: Team
+    team: AgentTeam
     items: list[Artifact]
 
 
@@ -49,6 +53,7 @@ def create_team_with_agents(
     name: str,
     description: str | None,
     agents: list[TeamCreationSpec],
+    settings: Settings | None = None,
 ) -> TeamCreationResult:
     ensure_role_templates(session)
 
@@ -74,7 +79,7 @@ def create_team_with_agents(
             "Unknown role templates requested: " + ", ".join(sorted(missing))
         )
 
-    team = Team(
+    team = AgentTeam(
         user_id=user.id,
         name=normalized_name,
         description=description.strip() if description else None,
@@ -91,12 +96,11 @@ def create_team_with_agents(
     for spec in agents:
         template = templates_by_key[spec.role_template_key]
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=template.id,
             name=(spec.name.strip() if spec.name else f"{template.name} Agent"),
             role_name=template.name,
             status="provisioning",
-            shared_workspace_enabled=True,
         )
         session.add(agent)
         created_agents.append(agent)
@@ -126,6 +130,20 @@ def create_team_with_agents(
     session.refresh(team)
     for agent in created_agents:
         session.refresh(agent)
+        create_team_assignment(
+            session,
+            team_id=team.id,
+            agent_id=agent.id,
+            shared_workspace_enabled=True,
+        )
+    session.commit()
+    for agent in created_agents:
+        session.refresh(agent)
+        if settings is not None:
+            try:
+                ensure_agent_runtime_lease(session, agent=agent, settings=settings)
+            except RuntimeNotReadyError:
+                session.refresh(agent)
 
     return TeamCreationResult(team=team, agents=created_agents)
 
@@ -137,7 +155,7 @@ def read_team_workspace(
     team_id: UUID,
 ) -> TeamWorkspaceResult:
     team = session.exec(
-        select(Team).where(Team.id == team_id).where(Team.user_id == user.id)
+        select(AgentTeam).where(AgentTeam.id == team_id).where(AgentTeam.user_id == user.id)
     ).first()
     if team is None:
         raise TeamServiceError("Team not found.")
@@ -157,7 +175,7 @@ def list_team_artifacts(
     team_id: UUID,
 ) -> TeamArtifactResult:
     team = session.exec(
-        select(Team).where(Team.id == team_id).where(Team.user_id == user.id)
+        select(AgentTeam).where(AgentTeam.id == team_id).where(AgentTeam.user_id == user.id)
     ).first()
     if team is None:
         raise TeamServiceError("Team not found.")
@@ -182,7 +200,7 @@ def upsert_workspace_item(
     agent_id: UUID | None = None,
 ) -> SharedWorkspaceItem:
     team = session.exec(
-        select(Team).where(Team.id == team_id).where(Team.user_id == user.id)
+        select(AgentTeam).where(AgentTeam.id == team_id).where(AgentTeam.user_id == user.id)
     ).first()
     if team is None:
         raise TeamServiceError("Team not found.")

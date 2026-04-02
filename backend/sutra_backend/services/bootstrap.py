@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from sqlmodel import Session, select
 
 from sutra_backend.config import Settings
-from sutra_backend.models import Agent, RoleTemplate, Team, User
+from sutra_backend.models import Agent, AgentTeam, AgentTeamAssignment, RoleTemplate, User
 from sutra_backend.runtime.errors import RuntimeNotReadyError
 from sutra_backend.runtime.provisioning import ensure_agent_runtime_lease
+from sutra_backend.services.agent_teams import create_team_assignment
 
 
 @dataclass(frozen=True)
@@ -81,15 +82,15 @@ def ensure_personal_workspace(
     user: User,
     *,
     settings: Settings | None = None,
-) -> tuple[Team, Agent]:
+) -> tuple[AgentTeam, Agent]:
     templates_by_key = ensure_role_templates(session)
     default_template = templates_by_key["generalist"]
 
     team = session.exec(
-        select(Team).where(Team.user_id == user.id).where(Team.mode == "personal")
+        select(AgentTeam).where(AgentTeam.user_id == user.id).where(AgentTeam.mode == "personal")
     ).first()
     if team is None:
-        team = Team(
+        team = AgentTeam(
             user_id=user.id,
             name="My Workspace",
             description="Default personal workspace for a single user and their persistent agents.",
@@ -99,19 +100,30 @@ def ensure_personal_workspace(
         session.commit()
         session.refresh(team)
 
-    agent = session.exec(select(Agent).where(Agent.team_id == team.id)).first()
+    agent = session.exec(
+        select(Agent)
+        .join(AgentTeamAssignment, AgentTeamAssignment.agent_id == Agent.id)
+        .where(Agent.user_id == user.id)
+        .where(AgentTeamAssignment.agent_team_id == team.id)
+    ).first()
     if agent is None:
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=default_template.id,
             name="Default Agent",
             role_name=default_template.name,
             status="provisioning",
-            shared_workspace_enabled=True,
         )
         session.add(agent)
         session.commit()
         session.refresh(agent)
+        create_team_assignment(
+            session,
+            team_id=team.id,
+            agent_id=agent.id,
+            shared_workspace_enabled=True,
+        )
+        session.commit()
         if settings is not None:
             try:
                 ensure_agent_runtime_lease(session, agent=agent, settings=settings)

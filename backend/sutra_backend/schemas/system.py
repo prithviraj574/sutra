@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from sutra_backend.enums import PollerLeaseState
+
 
 class PollerLeaseRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -12,7 +14,7 @@ class PollerLeaseRead(BaseModel):
     id: UUID
     name: str
     owner_id: str | None = None
-    state: str
+    state: PollerLeaseState
     last_heartbeat_at: datetime | None = None
     lease_expires_at: datetime | None = None
     last_sweep_started_at: datetime | None = None

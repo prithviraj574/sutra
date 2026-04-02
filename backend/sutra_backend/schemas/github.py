@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from sutra_backend.enums import GitHubAccountType
+
 
 class GitHubConnectionRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -13,7 +15,7 @@ class GitHubConnectionRead(BaseModel):
     user_id: UUID
     installation_id: str
     account_login: str
-    account_type: str
+    account_type: GitHubAccountType
     connected_at: datetime
     created_at: datetime
     updated_at: datetime

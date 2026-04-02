@@ -5,12 +5,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from sutra_backend.enums import SecretScope
+
 
 class SecretCreateRequest(BaseModel):
     name: str
     value: str
     provider: str | None = None
-    scope: str = "user"
+    scope: SecretScope = SecretScope.USER
     team_id: UUID | None = None
     agent_id: UUID | None = None
 
@@ -24,7 +26,7 @@ class SecretRead(BaseModel):
     agent_id: UUID | None = None
     name: str
     provider: str | None = None
-    scope: str
+    scope: SecretScope
     last_used_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

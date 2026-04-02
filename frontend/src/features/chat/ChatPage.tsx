@@ -1,8 +1,14 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { type Agent, type Artifact, type ChatMessage, type ConversationStreamEvent, type SharedWorkspaceItem } from "../../lib/api";
+import {
+  type Agent,
+  type Artifact,
+  type ChatMessage,
+  type ConversationStreamEvent,
+  type SharedWorkspaceItem,
+} from "../../lib/api.generated";
 import { useApiClient, useBackendSession } from "../auth/useSession";
 import { readAgentChatParams } from "./routes";
 import { buildWorkspaceExportPath, listAgentConversationWorkspaceItems } from "./workspace";
@@ -53,46 +59,105 @@ export function ChatPage({ agentId }: ChatPageProps) {
   const [selectedSecretIds, setSelectedSecretIds] = useState<string[]>([]);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [pendingPromptPreview, setPendingPromptPreview] = useState("");
+  const autoStartedPromptKeyRef = useRef<string | null>(null);
 
   const agents = useQuery({
     queryKey: ["agents", session.data?.user.id],
     queryFn: () => api.listAgents(),
     enabled: !!session.data,
   });
+  const teams = useQuery({
+    queryKey: ["teams", session.data?.user.id],
+    queryFn: () => api.listTeams(),
+    enabled: !!session.data,
+  });
+  const normalizedAgents = useMemo<Agent[]>(
+    () =>
+      (agents.data?.items ?? []).map((entry) => ({
+        ...entry,
+        team_ids: entry.team_ids ?? [],
+      })),
+    [agents.data?.items],
+  );
   const agent = useMemo<Agent | null>(
-    () => agents.data?.items.find((entry) => entry.id === agentId) ?? null,
-    [agentId, agents.data?.items],
+    () => normalizedAgents.find((entry) => entry.id === agentId) ?? null,
+    [agentId, normalizedAgents],
+  );
+  const personalWorkspaceTeamId = useMemo(
+    () =>
+      agent?.team_ids.find((teamId) =>
+        (teams.data?.items ?? []).some((team) => team.id === teamId && team.mode === "personal"),
+      ),
+    [agent?.team_ids, teams.data?.items],
   );
   const conversations = useQuery({
     queryKey: ["agent-conversations", agentId],
-    queryFn: () => api.listAgentConversations(agentId),
+    queryFn: () =>
+      api.getAgentConversations({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+      }),
     enabled: !!agent,
   });
-  const activeConversationId = conversationId ?? conversations.data?.items[0]?.id;
+  const currentParams = readAgentChatParams(searchParams);
+  const requestedNewConversation =
+    currentParams.newConversation && !currentParams.conversationId;
+  const waitingForAutoStartedConversation =
+    !!currentParams.prompt && !conversationId && !currentParams.conversationId;
+  const activeConversationId =
+    conversationId ??
+    (waitingForAutoStartedConversation || requestedNewConversation
+      ? undefined
+      : conversations.data?.items[0]?.id);
   const runtime = useQuery({
     queryKey: ["agent-runtime", agentId],
-    queryFn: () => api.readAgentRuntime(agentId),
+    queryFn: () =>
+      api.getAgentRuntime({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+      }),
     retry: false,
   });
+  const runtimeReady = runtime.data?.lease.ready ?? false;
   const teamWorkspace = useQuery({
-    queryKey: ["team-workspace", agent?.team_id],
-    queryFn: () => api.readTeamWorkspace(agent!.team_id),
-    enabled: !!agent?.team_id,
+    queryKey: ["team-workspace", personalWorkspaceTeamId],
+    queryFn: () =>
+      api.getTeamWorkspace({
+        params: {
+          path: {
+            team_id: personalWorkspaceTeamId!,
+          },
+        },
+      }),
+    enabled: !!personalWorkspaceTeamId,
   });
   const teamArtifacts = useQuery({
-    queryKey: ["team-artifacts", agent?.team_id],
-    queryFn: () => api.listTeamArtifacts(agent!.team_id),
-    enabled: !!agent?.team_id,
+    queryKey: ["team-artifacts", personalWorkspaceTeamId],
+    queryFn: () =>
+      api.getTeamArtifacts({
+        params: {
+          path: {
+            team_id: personalWorkspaceTeamId!,
+          },
+        },
+      }),
+    enabled: !!personalWorkspaceTeamId,
   });
   const githubConnection = useQuery({
     queryKey: ["github-connection", session.data?.user.id],
-    queryFn: () => api.readGitHubConnection(),
+    queryFn: () => api.readGithubConnection(),
     enabled: !!session.data,
     retry: false,
   });
   const githubRepositories = useQuery({
     queryKey: ["github-repositories", session.data?.user.id],
-    queryFn: () => api.listGitHubRepositories(),
+    queryFn: () => api.getGithubRepositories(),
     enabled: !!githubConnection.data?.connection,
     retry: false,
   });
@@ -102,23 +167,55 @@ export function ChatPage({ agentId }: ChatPageProps) {
     enabled: !!session.data,
   });
   const provisionRuntime = useMutation({
-    mutationFn: () => api.provisionAgentRuntime(agentId),
+    mutationFn: () =>
+      api.provisionAgentRuntime({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+      }),
+    onSuccess: () => {
+      setStreamError(null);
+      void queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
+    },
   });
   const verifyRuntime = useMutation({
-    mutationFn: () => api.verifyAgentRuntime(agentId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
+    mutationFn: () =>
+      api.verifyAgentRuntime({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
     },
   });
   const restartRuntime = useMutation({
-    mutationFn: () => api.restartAgentRuntime(agentId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
+    mutationFn: () =>
+      api.restartAgentRuntime({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
     },
   });
   const persistedMessages = useQuery({
     queryKey: ["conversation-messages", activeConversationId],
-    queryFn: () => api.listConversationMessages(activeConversationId!),
+    queryFn: () =>
+      api.getConversationMessages({
+        params: {
+          path: {
+            conversation_id: activeConversationId!,
+          },
+        },
+      }),
     enabled: !!activeConversationId,
   });
 
@@ -182,7 +279,7 @@ export function ChatPage({ agentId }: ChatPageProps) {
           current.includes(itemId) ? current : [itemId, ...current].slice(0, 3),
         );
         setSelectedWorkspaceItemId(itemId);
-        void queryClient.invalidateQueries({ queryKey: ["team-workspace", agent?.team_id] });
+        void queryClient.invalidateQueries({ queryKey: ["team-workspace", personalWorkspaceTeamId] });
         return;
       }
       if (event.type === "runtime.state_changed") {
@@ -215,58 +312,121 @@ export function ChatPage({ agentId }: ChatPageProps) {
       cancelled = true;
       closeStream();
     };
-  }, [activeConversationId, agent?.team_id, agentId, api, pendingPromptPreview, queryClient]);
+  }, [activeConversationId, agentId, api, pendingPromptPreview, personalWorkspaceTeamId, queryClient]);
 
   const responseMutation = useMutation({
-    mutationFn: (prompt: string) =>
-      api.createAgentResponse(agentId, {
-        input: prompt,
-        conversation_id: activeConversationId,
-        secret_ids: selectedSecretIds,
+    mutationFn: ({
+      prompt,
+      conversationIdOverride,
+    }: {
+      prompt: string;
+      conversationIdOverride?: string;
+    }) =>
+      api.createAgentResponse({
+        params: {
+          path: {
+            agent_id: agentId,
+          },
+        },
+        body: {
+          input: prompt,
+          conversation_id: conversationIdOverride,
+          store: true,
+          model: "hermes-agent",
+          secret_ids: selectedSecretIds,
+        },
       }),
-    onSuccess: async (response) => {
+    onSuccess: (response) => {
       setPendingPromptPreview("");
       setConversationId(response.conversation_id);
       if (response.workspace_item_id) {
         setLatestGeneratedItemIds([response.workspace_item_id]);
         setSelectedWorkspaceItemId(response.workspace_item_id);
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["conversation-messages", response.conversation_id] }),
-        queryClient.invalidateQueries({ queryKey: ["agent-conversations", agentId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", agent?.team_id] }),
-        queryClient.invalidateQueries({ queryKey: ["team-artifacts", agent?.team_id] }),
-        queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] }),
-      ]);
+      void queryClient.invalidateQueries({ queryKey: ["conversation-messages", response.conversation_id] });
+      void queryClient.invalidateQueries({ queryKey: ["agent-conversations", agentId] });
+      void queryClient.invalidateQueries({ queryKey: ["team-workspace", personalWorkspaceTeamId] });
+      void queryClient.invalidateQueries({ queryKey: ["team-artifacts", personalWorkspaceTeamId] });
+      void queryClient.invalidateQueries({ queryKey: ["agent-runtime", agentId] });
     },
     onError: () => {
       setPendingPromptPreview("");
     },
   });
 
+  async function submitPrompt(
+    prompt: string,
+    options?: { conversationIdOverride?: string },
+  ) {
+    if (!runtimeReady) {
+      setStreamError("Runtime is not ready yet. Provision the runtime before sending a prompt.");
+      return;
+    }
+
+    setStreamError(null);
+    setPendingPromptPreview(prompt);
+    await responseMutation.mutateAsync({
+      prompt,
+      conversationIdOverride: options?.conversationIdOverride ?? activeConversationId,
+    });
+  }
+
   const exportMutation = useMutation({
     mutationFn: () =>
-      api.exportWorkspaceItemToGitHub(agent!.team_id, selectedWorkspaceItemId!, {
-        repository_full_name: selectedRepository,
-        path: exportPath.trim(),
-        commit_message: commitMessage.trim(),
+      api.exportWorkspaceItem({
+        params: {
+          path: {
+            team_id: personalWorkspaceTeamId!,
+            item_id: selectedWorkspaceItemId!,
+          },
+        },
+        body: {
+          repository_full_name: selectedRepository,
+          path: exportPath.trim(),
+          commit_message: commitMessage.trim(),
+        },
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["team-artifacts", agent?.team_id] });
+      await queryClient.invalidateQueries({ queryKey: ["team-artifacts", personalWorkspaceTeamId] });
     },
   });
 
   useEffect(() => {
-    const { prompt: initialPrompt } = readAgentChatParams(searchParams);
-    if (!initialPrompt || responseMutation.isPending || messages.length > 0) {
+    if (
+      !currentParams.prompt ||
+      !runtimeReady ||
+      responseMutation.isPending ||
+      messages.length > 0
+    ) {
+      if (!currentParams.prompt) {
+        autoStartedPromptKeyRef.current = null;
+      }
       return;
     }
 
-    void responseMutation.mutateAsync(initialPrompt);
+    const autoStartKey = `${agentId}:${currentParams.conversationId ?? "new"}:${currentParams.prompt}`;
+    if (autoStartedPromptKeyRef.current === autoStartKey) {
+      return;
+    }
+    autoStartedPromptKeyRef.current = autoStartKey;
+
+    setDraft("");
+    void submitPrompt(currentParams.prompt, {
+      conversationIdOverride: currentParams.conversationId,
+    });
     const next = new URLSearchParams(searchParams);
     next.delete("prompt");
     setSearchParams(next, { replace: true });
-  }, [messages.length, responseMutation, searchParams, setSearchParams]);
+  }, [
+    agentId,
+    currentParams.conversationId,
+    currentParams.prompt,
+    messages.length,
+    responseMutation.isPending,
+    runtimeReady,
+    searchParams,
+    setSearchParams,
+  ]);
 
   useEffect(() => {
     if (!conversationId) {
@@ -280,33 +440,24 @@ export function ChatPage({ agentId }: ChatPageProps) {
 
     const next = new URLSearchParams(searchParams);
     next.set("conversationId", conversationId);
+    next.delete("new");
     setSearchParams(next, { replace: true });
   }, [conversationId, searchParams, setSearchParams]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const prompt = draft.trim();
-    if (!prompt) {
+    if (!prompt || responseMutation.isPending || provisionRuntime.isPending) {
       return;
     }
 
-    setPendingPromptPreview(prompt);
     setDraft("");
-    void (async () => {
-      if (!runtime.data && !provisionRuntime.isPending) {
-        try {
-          await provisionRuntime.mutateAsync();
-        } catch {
-          // The response route can still provision as a fallback.
-        }
-      }
-      await responseMutation.mutateAsync(prompt);
-    })();
+    void submitPrompt(prompt);
   }
 
   function handleExport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!agent?.team_id || !selectedWorkspaceItemId || !selectedRepository || !exportPath.trim() || !commitMessage.trim()) {
+    if (!personalWorkspaceTeamId || !selectedWorkspaceItemId || !selectedRepository || !exportPath.trim() || !commitMessage.trim()) {
       return;
     }
     void exportMutation.mutateAsync();
@@ -413,6 +564,9 @@ export function ChatPage({ agentId }: ChatPageProps) {
                 {restartRuntime.error ? (
                   <p className="mt-2 text-xs text-primary">{restartRuntime.error.message}</p>
                 ) : null}
+                {responseMutation.error ? (
+                  <p className="mt-2 text-xs text-primary">{responseMutation.error.message}</p>
+                ) : null}
                 {streamError ? <p className="mt-2 text-xs text-primary">{streamError}</p> : null}
               </div>
               <div className="flex flex-wrap gap-2">
@@ -469,6 +623,8 @@ export function ChatPage({ agentId }: ChatPageProps) {
           <form className="fixed inset-x-0 bottom-0 border-t border-border bg-background/95 px-6 py-4 backdrop-blur lg:left-0 lg:right-[55%]" onSubmit={handleSubmit}>
             <div className="aura-border rounded-lg bg-surface p-3">
               <textarea
+                id="chat-draft"
+                name="chatDraft"
                 className="min-h-28 w-full resize-none bg-transparent px-3 py-2 text-sm leading-7 text-text outline-none placeholder:text-muted"
                 placeholder="Describe what you want Sutra to build next..."
                 value={draft}
@@ -506,7 +662,11 @@ export function ChatPage({ agentId }: ChatPageProps) {
                     Runtime {runtime.data?.lease.readiness_stage ?? runtime.data?.lease.state ?? "not provisioned"}
                   </p>
                 </div>
-                <button className="btn-primary" type="submit">
+                <button
+                  className="btn-primary"
+                  disabled={!draft.trim() || responseMutation.isPending || provisionRuntime.isPending}
+                  type="submit"
+                >
                   Send
                 </button>
               </div>

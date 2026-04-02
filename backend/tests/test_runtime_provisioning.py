@@ -7,8 +7,15 @@ from sqlmodel import Session, SQLModel, select
 
 from sutra_backend.config import Settings
 from sutra_backend.db import create_database_engine
-from sutra_backend.models import Agent, RoleTemplate, RuntimeLease, Team, User
+from sutra_backend.models import Agent, AgentTeam, RoleTemplate, RuntimeLease, User
 from sutra_backend.runtime.errors import RuntimeNotReadyError
+from sutra_backend.runtime.honcho import (
+    build_honcho_agent_peer_name,
+    build_honcho_user_peer_name,
+    build_honcho_workspace_id,
+    build_runtime_honcho_config,
+)
+from sutra_backend.runtime.managed_env import build_managed_runtime_env
 from sutra_backend.runtime.provisioning import (
     GcpFirecrackerRuntimeProvisioner,
     ServiceAccountFileGoogleAccessTokenProvider,
@@ -56,10 +63,6 @@ def _patch_gcp_host_runtime(
     provisioned_microvm_state: str = "running",
 ) -> None:
     monkeypatch.setattr(
-        "sutra_backend.runtime.provisioning.GcpFirecrackerRuntimeProvisioner._wait_for_host_api",
-        lambda self, host_api_base_url: None,
-    )
-    monkeypatch.setattr(
         "sutra_backend.runtime.provisioning.GcpFirecrackerHostClient.provision_microvm",
         lambda self, *, payload: type(
             "Microvm",
@@ -74,6 +77,10 @@ def _patch_gcp_host_runtime(
             },
         )(),
     )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpFirecrackerRuntimeProvisioner._wait_for_host_api",
+        lambda self, host_api_base_url: None,
+    )
 
 
 def _patch_gcp_host_runtime_restart(
@@ -87,8 +94,8 @@ def _patch_gcp_host_runtime_restart(
         lambda self, host_api_base_url: None,
     )
     monkeypatch.setattr(
-        "sutra_backend.runtime.provisioning.GcpFirecrackerHostClient.restart_microvm",
-        lambda self, *, microvm_id: type(
+        "sutra_backend.runtime.provisioning.GcpFirecrackerHostClient.restart_microvm_with_payload",
+        lambda self, *, microvm_id, payload: type(
             "Microvm",
             (),
             {
@@ -120,13 +127,13 @@ def test_runtime_provisioner_creates_local_dev_lease_when_missing() -> None:
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="My Workspace", mode="personal")
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -176,13 +183,13 @@ def test_runtime_provisioner_reuses_existing_lease() -> None:
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="My Workspace", mode="personal")
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -193,7 +200,7 @@ def test_runtime_provisioner_reuses_existing_lease() -> None:
 
         existing_lease = RuntimeLease(
             agent_id=agent.id,
-            vm_id="vm-existing",
+            vm_id=f"local-dev-{str(agent.id)[:8]}",
             state="running",
             api_base_url="http://existing-runtime.internal",
         )
@@ -212,10 +219,92 @@ def test_runtime_provisioner_reuses_existing_lease() -> None:
             ),
         )
 
-        assert lease.vm_id == "vm-existing"
-        assert lease.api_base_url == "http://existing-runtime.internal"
+        assert lease.vm_id == existing_lease.vm_id
+        assert lease.api_base_url == "http://runtime.internal"
         assert lease.started_at is not None
         assert lease.last_heartbeat_at is not None
+
+
+def test_runtime_provisioner_replaces_existing_lease_when_provider_changes(monkeypatch) -> None:
+    engine = create_database_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpStorageClient.ensure_prefix",
+        lambda self, *, bucket, prefix: None,
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpComputeEngineClient.get_instance",
+        lambda self, *, name: _gcp_instance(name, "10.0.0.8", "34.118.10.8"),
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpComputeEngineClient.get_disk",
+        lambda self, *, name: _gcp_disk(name),
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpFirecrackerRuntimeProvisioner._wait_for_instance",
+        lambda self, compute_client, *, name: _gcp_instance(name, "10.0.0.8", "34.118.10.8"),
+    )
+    _patch_gcp_host_runtime(monkeypatch, provisioned_host_ip="34.118.10.8")
+
+    with Session(engine) as session:
+        user = User(firebase_uid="firebase-user-1", email="user@example.com")
+        role_template = RoleTemplate(
+            key="generalist",
+            name="Generalist",
+            default_system_prompt="Default agent.",
+        )
+        session.add(user)
+        session.add(role_template)
+        session.commit()
+        session.refresh(user)
+        session.refresh(role_template)
+
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
+        session.add(team)
+        session.commit()
+        session.refresh(team)
+
+        agent = Agent(
+            user_id=user.id,
+            role_template_id=role_template.id,
+            name="Default Agent",
+            role_name="Generalist",
+        )
+        session.add(agent)
+        session.commit()
+        session.refresh(agent)
+
+        existing_lease = RuntimeLease(
+            agent_id=agent.id,
+            vm_id=f"local-dev-{str(agent.id)[:8]}",
+            state="running",
+            api_base_url="http://127.0.0.1:8642",
+        )
+        session.add(existing_lease)
+        session.commit()
+
+        lease = ensure_agent_runtime_lease(
+            session,
+            agent=agent,
+            settings=Settings(
+                app_env="test",
+                database_url="sqlite://",
+                runtime_provider="gcp_firecracker",
+                dev_runtime_api_key="runtime-key",
+                gcs_bucket_name="sutra-runtime",
+                gcp_project_id="sutra-project",
+                gcp_compute_zone="us-central1-a",
+                gcp_runtime_source_image="sutra-runtime-image",
+                gcp_runtime_source_image_project="sutra-images",
+                gcp_runtime_access_token="token",
+            ),
+        )
+
+        assert lease.vm_id.startswith("agent-")
+        assert lease.vm_id != existing_lease.vm_id
+        assert lease.api_base_url.endswith(f"/microvms/{lease.vm_id}/proxy/")
+        assert session.exec(select(RuntimeLease)).one().id == lease.id
 
 
 def test_runtime_provisioner_restarts_existing_local_dev_lease() -> None:
@@ -235,13 +324,13 @@ def test_runtime_provisioner_restarts_existing_local_dev_lease() -> None:
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="My Workspace", mode="personal")
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -300,13 +389,13 @@ def test_runtime_provisioner_can_surface_unconfigured_gcp_provider() -> None:
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="My Workspace", mode="personal")
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -419,7 +508,7 @@ def test_runtime_provisioner_creates_gcp_firecracker_lease_and_agent_storage(
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(
+        team = AgentTeam(
             user_id=user.id,
             name="My Workspace",
             mode="personal",
@@ -430,7 +519,7 @@ def test_runtime_provisioner_creates_gcp_firecracker_lease_and_agent_storage(
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Default Agent",
             role_name="Generalist",
@@ -453,6 +542,7 @@ def test_runtime_provisioner_creates_gcp_firecracker_lease_and_agent_storage(
                 gcp_runtime_source_image="sutra-runtime-image",
                 gcp_runtime_source_image_project="sutra-images",
                 gcp_runtime_access_token="token",
+                honcho_api_key="honcho-key",
             ),
         )
 
@@ -510,6 +600,168 @@ def test_runtime_provisioner_creates_gcp_firecracker_lease_and_agent_storage(
         assert ".hermes/.env" not in startup_script_entry["value"]
 
 
+def test_runtime_provisioner_builds_per_user_honcho_config_for_microvm(
+    monkeypatch,
+) -> None:
+    engine = create_database_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+
+    captured_payloads: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpStorageClient.ensure_prefix",
+        lambda self, *, bucket, prefix: None,
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpComputeEngineClient.get_instance",
+        lambda self, *, name: None,
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpComputeEngineClient.get_disk",
+        lambda self, *, name: None,
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpComputeEngineClient.create_disk",
+        lambda self, *, name, size_gb, disk_type: None,
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpComputeEngineClient.create_instance",
+        lambda self, *, body: None,
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpFirecrackerRuntimeProvisioner._wait_for_disk",
+        lambda self, compute_client, *, name: _gcp_disk(name),
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpFirecrackerRuntimeProvisioner._wait_for_instance",
+        lambda self, compute_client, *, name: _gcp_instance(name, "10.0.0.9", "34.118.10.9"),
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpFirecrackerRuntimeProvisioner._wait_for_host_api",
+        lambda self, host_api_base_url: None,
+    )
+    monkeypatch.setattr(
+        "sutra_backend.runtime.provisioning.GcpFirecrackerHostClient.provision_microvm",
+        lambda self, *, payload: (
+            captured_payloads.append(payload),
+            type(
+                "Microvm",
+                (),
+                {
+                    "microvm_id": str(payload["microvm_id"]),
+                    "state": "running",
+                    "proxy_base_url": (
+                        f"http://34.118.10.9:8787/microvms/{payload['microvm_id']}/proxy/"
+                    ),
+                },
+            )(),
+        )[1],
+    )
+
+    with Session(engine) as session:
+        user = User(firebase_uid="firebase-user-9", email="honcho@example.com")
+        role_template = RoleTemplate(
+            key="generalist",
+            name="Generalist",
+            default_system_prompt="Default agent.",
+        )
+        session.add(user)
+        session.add(role_template)
+        session.commit()
+        session.refresh(user)
+        session.refresh(role_template)
+
+        team = AgentTeam(user_id=user.id, name="My Workspace", mode="personal")
+        session.add(team)
+        session.commit()
+        session.refresh(team)
+
+        agent = Agent(
+            user_id=user.id,
+            role_template_id=role_template.id,
+            name="Default Agent",
+            role_name="Generalist",
+        )
+        session.add(agent)
+        session.commit()
+        session.refresh(agent)
+
+        settings = Settings(
+            app_env="test",
+            database_url="sqlite://",
+            runtime_provider="gcp_firecracker",
+            dev_runtime_api_key="runtime-key",
+            gcs_bucket_name="sutra-runtime",
+            gcp_project_id="sutra-project",
+            gcp_compute_zone="us-central1-a",
+            gcp_runtime_source_image="sutra-runtime-image",
+            gcp_runtime_source_image_project="sutra-images",
+            gcp_runtime_access_token="token",
+            honcho_api_key="honcho-key",
+            minimax_api_key="minimax-key",
+        )
+
+        ensure_agent_runtime_lease(
+            session,
+            agent=agent,
+            settings=settings,
+        )
+
+        assert len(captured_payloads) == 1
+        honcho_config = captured_payloads[0]["honcho_config"]
+        assert isinstance(honcho_config, dict)
+        assert honcho_config["apiKey"] == "honcho-key"
+        assert honcho_config["sessionStrategy"] == "per-session"
+        assert captured_payloads[0]["runtime_env"] == {"MINIMAX_API_KEY": "minimax-key"}
+        hermes_host = honcho_config["hosts"]["hermes"]
+        assert hermes_host["workspace"] == build_honcho_workspace_id(user_id=user.id, settings=settings)
+        assert hermes_host["peerName"] == build_honcho_user_peer_name(user_id=user.id)
+        assert hermes_host["aiPeer"] == build_honcho_agent_peer_name(agent_id=agent.id)
+
+
+def test_build_runtime_honcho_config_reads_api_key_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("HONCHO_API_KEY", "env-honcho-key")
+
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite://",
+        runtime_provider="gcp_firecracker",
+        gcs_bucket_name="sutra-runtime",
+        gcp_project_id="sutra-project",
+        gcp_compute_zone="us-central1-a",
+        gcp_runtime_source_image="sutra-runtime-image",
+        gcp_runtime_source_image_project="sutra-images",
+        gcp_runtime_access_token="token",
+    )
+
+    config = build_runtime_honcho_config(
+        settings=settings,
+        user_id=uuid4(),
+        agent_id=uuid4(),
+    )
+
+    assert config is not None
+    assert config["apiKey"] == "env-honcho-key"
+
+
+def test_build_managed_runtime_env_reads_managed_provider_keys() -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite://",
+        minimax_api_key="minimax-key",
+        firecrawl_api_key="firecrawl-key",
+        browserbase_api_key="browserbase-key",
+        browserbase_project_id="browserbase-project",
+    )
+
+    assert build_managed_runtime_env(settings) == {
+        "MINIMAX_API_KEY": "minimax-key",
+        "FIRECRAWL_API_KEY": "firecrawl-key",
+        "BROWSERBASE_API_KEY": "browserbase-key",
+        "BROWSERBASE_PROJECT_ID": "browserbase-project",
+    }
+
+
 def test_runtime_provisioner_supports_image_family_and_runtime_bundle(monkeypatch) -> None:
     engine = create_database_engine("sqlite://")
     SQLModel.metadata.create_all(engine)
@@ -559,13 +811,13 @@ def test_runtime_provisioner_supports_image_family_and_runtime_bundle(monkeypatc
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(user_id=user.id, name="Runtime Team", mode="personal")
+        team = AgentTeam(user_id=user.id, name="Runtime Team", mode="personal")
         session.add(team)
         session.commit()
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Runtime Agent",
             role_name="Researcher",
@@ -607,7 +859,7 @@ def test_runtime_provisioner_supports_image_family_and_runtime_bundle(monkeypatc
     assert "apt-get install -y python3 python3-venv python3-pip curl ca-certificates tar" in startup_script_entry["value"]
     assert "sutra-hermes-bundle.tar.gz" in startup_script_entry["value"]
     assert "sutra-backend-runtime.tar.gz" in startup_script_entry["value"]
-    assert "/opt/sutra-runtime-venv/bin/pip install -r requirements.txt fastapi pydantic-settings uvicorn sqlmodel" in startup_script_entry["value"]
+    assert "/opt/sutra-runtime-venv/bin/pip install -r requirements.txt fastapi pydantic-settings uvicorn sqlmodel 'honcho-ai>=2.0.1,<3' 'anthropic>=0.39.0'" in startup_script_entry["value"]
     assert "PYTHONPATH=/opt/sutra-backend:/opt/hermes-agent" in startup_script_entry["value"]
     assert "GCP_RUNTIME_GATEWAY_COMMAND='/opt/sutra-runtime-venv/bin/python -m gateway.run'" in startup_script_entry["value"]
     assert "uvicorn sutra_backend.runtime.firecracker_host_service:app" in startup_script_entry["value"]
@@ -646,7 +898,7 @@ def test_runtime_provisioner_restarts_gcp_microvm_without_changing_private_stora
         session.refresh(user)
         session.refresh(role_template)
 
-        team = Team(
+        team = AgentTeam(
             user_id=user.id,
             name="Restart Team",
             mode="personal",
@@ -657,7 +909,7 @@ def test_runtime_provisioner_restarts_gcp_microvm_without_changing_private_stora
         session.refresh(team)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Restart Agent",
             role_name="Executor",
@@ -709,7 +961,7 @@ def test_runtime_provisioner_restarts_gcp_microvm_without_changing_private_stora
         assert agent.private_volume_uri == f"gs://sutra-runtime/agents/{agent.id}/private-volume"
 
 
-def test_runtime_provisioner_rejects_overlapping_shared_workspace_path() -> None:
+def test_runtime_provisioner_does_not_attach_a_default_shared_workspace_path() -> None:
     provisioner = GcpFirecrackerRuntimeProvisioner(
         Settings(
             app_env="test",
@@ -727,14 +979,9 @@ def test_runtime_provisioner_rejects_overlapping_shared_workspace_path() -> None
         )
     )
 
-    agent = Agent(team_id=uuid4(), name="Agent", role_name="Role")
-
-    try:
-        provisioner._build_storage_spec(agent)
-    except RuntimeNotReadyError as exc:
-        assert "Shared workspace path must not live under the private state mount." == str(exc)
-    else:
-        raise AssertionError("Expected overlapping shared workspace path to be rejected.")
+    agent = Agent(user_id=uuid4(), name="Agent", role_name="Role")
+    storage_spec = provisioner._build_storage_spec(agent)
+    assert storage_spec.shared_workspace_path is None
 
 
 def test_runtime_provisioner_prefers_host_api_override_base_url() -> None:

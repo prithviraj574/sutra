@@ -5,10 +5,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../auth/AuthProvider";
 import { useApiClient, useBackendSession } from "../auth/useSession";
 import { readFrontendEnv } from "../../lib/env";
+import { parseApiDate } from "../../lib/dates";
 import { buildAgentChatHref } from "../chat/routes";
+import { pickDefaultAgent } from "./defaultAgent";
 
 function formatRelativeTime(dateString: string): string {
-  const date = new Date(dateString);
+  const date = parseApiDate(dateString);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMins = Math.floor(diffMs / 60000);
@@ -37,7 +39,7 @@ export function HubPage() {
   });
   const githubConnection = useQuery({
     queryKey: ["github-connection", session.data?.user.id],
-    queryFn: () => api.readGitHubConnection(),
+    queryFn: () => api.readGithubConnection(),
     enabled: !!session.data,
     retry: false,
   });
@@ -46,12 +48,26 @@ export function HubPage() {
     queryFn: () => api.listAgents(),
     enabled: !!session.data,
   });
+  const normalizedAgents = useMemo(
+    () =>
+      (agents.data?.items ?? []).map((entry) => ({
+        ...entry,
+        team_ids: entry.team_ids ?? [],
+      })),
+    [agents.data?.items],
+  );
   const workspaces = useQuery<Record<string, { path: string; kind: string }[]>>({
     queryKey: ["team-workspaces", teams.data?.items.map((team) => team.id).join(",")],
     queryFn: async () => {
       const entries = await Promise.all(
         (teams.data?.items ?? []).map(async (team) => {
-          const workspace = await api.readTeamWorkspace(team.id);
+          const workspace = await api.getTeamWorkspace({
+            params: {
+              path: {
+                team_id: team.id,
+              },
+            },
+          });
           return [
             team.id,
             workspace.items.map((item) => ({ path: item.path, kind: item.kind })),
@@ -64,34 +80,72 @@ export function HubPage() {
   });
   const [prompt, setPrompt] = useState("");
 
-  const defaultAgent = useMemo(() => agents.data?.items[0] ?? null, [agents.data?.items]);
+  const defaultAgent = useMemo(
+    () => pickDefaultAgent(normalizedAgents, teams.data?.items ?? []),
+    [normalizedAgents, teams.data?.items],
+  );
   const runtime = useQuery({
     queryKey: ["agent-runtime", defaultAgent?.id],
-    queryFn: () => api.readAgentRuntime(defaultAgent!.id),
+    queryFn: () =>
+      api.getAgentRuntime({
+        params: {
+          path: {
+            agent_id: defaultAgent!.id,
+          },
+        },
+      }),
     enabled: !!defaultAgent,
     retry: false,
   });
   const provisionRuntime = useMutation({
-    mutationFn: () => api.provisionAgentRuntime(defaultAgent!.id),
+    mutationFn: () =>
+      api.provisionAgentRuntime({
+        params: {
+          path: {
+            agent_id: defaultAgent!.id,
+          },
+        },
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["agent-runtime", defaultAgent?.id] });
     },
   });
   const verifyRuntime = useMutation({
-    mutationFn: () => api.verifyAgentRuntime(defaultAgent!.id),
+    mutationFn: () =>
+      api.verifyAgentRuntime({
+        params: {
+          path: {
+            agent_id: defaultAgent!.id,
+          },
+        },
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["agent-runtime", defaultAgent?.id] });
     },
   });
   const restartRuntime = useMutation({
-    mutationFn: () => api.restartAgentRuntime(defaultAgent!.id),
+    mutationFn: () =>
+      api.restartAgentRuntime({
+        params: {
+          path: {
+            agent_id: defaultAgent!.id,
+          },
+        },
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["agent-runtime", defaultAgent?.id] });
     },
   });
   const conversations = useQuery({
     queryKey: ["agent-conversations", defaultAgent?.id],
-    queryFn: () => api.listAgentConversations(defaultAgent!.id),
+    queryFn: () =>
+      api.getAgentConversations({
+        params: {
+          path: {
+            agent_id: defaultAgent!.id,
+          },
+        },
+      }),
     enabled: !!defaultAgent,
   });
   const conversationMessages = useQuery<Record<string, string>>({
@@ -104,7 +158,13 @@ export function HubPage() {
       await Promise.all(
         recent.map(async (conv) => {
           try {
-            const msgs = await api.listConversationMessages(conv.id);
+            const msgs = await api.getConversationMessages({
+              params: {
+                path: {
+                  conversation_id: conv.id,
+                },
+              },
+            });
             const last = msgs.items[msgs.items.length - 1];
             if (last) {
               previews[conv.id] = last.content.slice(0, 80) + (last.content.length > 80 ? "..." : "");
@@ -128,6 +188,7 @@ export function HubPage() {
     navigate(
       buildAgentChatHref(defaultAgent.id, {
         prompt: prompt.trim(),
+        newConversation: true,
       }),
     );
   }
@@ -140,7 +201,7 @@ export function HubPage() {
     return <main className="mx-auto min-h-screen max-w-4xl px-6 py-24">Loading workspace...</main>;
   }
 
-  if (!auth.firebaseEnabled) {
+  if (auth.authMode === "firebase" && !auth.firebaseEnabled) {
     return (
       <main className="mx-auto flex min-h-screen max-w-4xl items-center px-6 py-24">
         <div className="aura-border w-full rounded-lg bg-surface p-8">
@@ -165,6 +226,11 @@ export function HubPage() {
           <p className="mt-6 max-w-2xl text-base leading-7 text-muted">
             Sign in with Google to provision your default workspace, sync it with the backend, and continue directly into the chat canvas.
           </p>
+          {auth.authError ? (
+            <p className="mt-6 max-w-2xl rounded border border-border bg-surface px-4 py-3 text-sm text-primary">
+              {auth.authError}
+            </p>
+          ) : null}
           <button className="btn-primary mt-10" onClick={() => void auth.signIn()}>
             Sign In With Google
           </button>
@@ -191,6 +257,16 @@ export function HubPage() {
       {teamCreated === "1" ? (
         <div className="aura-border mb-8 rounded-lg bg-surface px-4 py-3 text-sm text-primary">
           Team created. Your new role-based workspace is ready.
+        </div>
+      ) : null}
+      {session.error ? (
+        <div className="mb-8 rounded-lg border border-border bg-surface px-4 py-3 text-sm text-primary">
+          Backend session sync failed: {session.error.message}
+        </div>
+      ) : null}
+      {auth.authMode === "dev_bypass" ? (
+        <div className="aura-border mb-8 rounded-lg bg-surface px-4 py-3 text-sm text-primary">
+          Local dev auth bypass is active. Sutra is using the seeded local user instead of Google sign-in.
         </div>
       ) : null}
       <header className="flex items-start justify-between gap-6">
@@ -296,7 +372,8 @@ export function HubPage() {
                 <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted">{team.mode}</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {agents.data?.items
-                    .filter((agent) => agent.team_id === team.id)
+                    .map((agent) => ({ ...agent, team_ids: agent.team_ids ?? [] }))
+                    .filter((agent) => agent.team_ids.includes(team.id))
                     .map((agent) => (
                       <span
                         className="rounded border border-border px-2 py-1 text-[11px] uppercase tracking-[0.14em] text-muted"
@@ -319,9 +396,9 @@ export function HubPage() {
               </div>
               <div className="text-right">
                 <p className="text-xs text-muted">
-                  {agents.data?.items.filter((agent) => agent.team_id === team.id).length ?? 0} agent
+                  {normalizedAgents.filter((agent) => agent.team_ids.includes(team.id)).length ?? 0} agent
                 </p>
-                {defaultAgent && team.id === defaultAgent.team_id ? (
+                {defaultAgent && defaultAgent.team_ids.includes(team.id) && team.mode === "personal" ? (
                   <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted">
                     Runtime {runtime.data?.lease.readiness_stage ?? runtime.data?.lease.state ?? "not provisioned"}
                   </p>
@@ -333,11 +410,11 @@ export function HubPage() {
                   >
                     Open
                   </Link>
-                ) : agents.data?.items.find((agent) => agent.team_id === team.id) ? (
+                ) : normalizedAgents.find((agent) => agent.team_ids.includes(team.id)) ? (
                   <Link
                     className="mt-2 inline-block text-xs uppercase tracking-[0.18em] text-muted transition-colors hover:text-primary"
                     to={buildAgentChatHref(
-                      agents.data!.items.find((agent) => agent.team_id === team.id)!.id,
+                      normalizedAgents.find((agent) => agent.team_ids.includes(team.id))!.id,
                     )}
                   >
                     Open
@@ -382,7 +459,10 @@ export function HubPage() {
         <section className="mt-16">
           <div className="mb-4 flex items-center justify-between">
             <p className="font-mono text-xs uppercase tracking-[0.22em] text-muted">Recent Conversations</p>
-            <Link className="text-sm text-muted transition-colors hover:text-primary" to={buildAgentChatHref(defaultAgent.id)}>
+            <Link
+              className="text-sm text-muted transition-colors hover:text-primary"
+              to={buildAgentChatHref(defaultAgent.id, { newConversation: true })}
+            >
               New Chat
             </Link>
           </div>

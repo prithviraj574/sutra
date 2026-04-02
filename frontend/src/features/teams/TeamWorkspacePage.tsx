@@ -2,8 +2,15 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { Agent, Artifact, AutomationJob, SharedWorkspaceItem, Team } from "../../lib/api";
+import {
+  type Agent,
+  type Artifact,
+  type AutomationJob,
+  type SharedWorkspaceItem,
+  type Team,
+} from "../../lib/api.generated";
 import { useApiClient, useBackendSession } from "../auth/useSession";
+import { parseApiDate } from "../../lib/dates";
 
 function TeamWorkspaceInner({ teamId }: { teamId: string }) {
   const api = useApiClient();
@@ -27,6 +34,18 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
   const [jobName, setJobName] = useState("");
   const [jobSchedule, setJobSchedule] = useState("0 9 * * 1");
   const [jobPrompt, setJobPrompt] = useState("");
+  const [jobOwnerAgentId, setJobOwnerAgentId] = useState("");
+
+  function refreshTeamWorkspaceState() {
+    void queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] });
+    void queryClient.invalidateQueries({ queryKey: ["team-conversations", teamId] });
+    void queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] });
+  }
+
+  function refreshTaskState() {
+    void queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] });
+    void queryClient.invalidateQueries({ queryKey: ["task-updates"] });
+  }
 
   const teams = useQuery({
     queryKey: ["teams", session.data?.user.id],
@@ -39,22 +58,50 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
   );
   const workspace = useQuery({
     queryKey: ["team-workspace", teamId],
-    queryFn: () => api.readTeamWorkspace(teamId),
+    queryFn: () =>
+      api.getTeamWorkspace({
+        params: {
+          path: {
+            team_id: teamId,
+          },
+        },
+      }),
     enabled: !!team,
   });
   const teamArtifacts = useQuery({
     queryKey: ["team-artifacts", teamId],
-    queryFn: () => api.listTeamArtifacts(teamId),
+    queryFn: () =>
+      api.getTeamArtifacts({
+        params: {
+          path: {
+            team_id: teamId,
+          },
+        },
+      }),
     enabled: !!team,
   });
   const automationJobs = useQuery({
     queryKey: ["automation-jobs", teamId],
-    queryFn: () => api.listAutomationJobs({ teamId }),
+    queryFn: () =>
+      api.getJobs({
+        params: {
+          query: {
+            agent_team_id: teamId,
+          },
+        },
+      }),
     enabled: !!team,
   });
   const teamConversations = useQuery({
     queryKey: ["team-conversations", teamId],
-    queryFn: () => api.listTeamConversations(teamId),
+    queryFn: () =>
+      api.getTeamConversations({
+        params: {
+          path: {
+            team_id: teamId,
+          },
+        },
+      }),
     enabled: !!team,
   });
   const agents = useQuery({
@@ -64,43 +111,71 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
   });
   const teamTasks = useQuery({
     queryKey: ["team-tasks", teamId],
-    queryFn: () => api.listTeamTasks(teamId),
+    queryFn: () =>
+      api.getTeamTasks({
+        params: {
+          path: {
+            team_id: teamId,
+          },
+        },
+      }),
     enabled: !!team,
   });
   const taskUpdates = useQuery({
     queryKey: ["task-updates", selectedTaskId],
-    queryFn: () => api.listTaskUpdates(selectedTaskId!),
+    queryFn: () =>
+      api.getTaskUpdates({
+        params: {
+          path: {
+            task_id: selectedTaskId!,
+          },
+        },
+      }),
     enabled: !!selectedTaskId,
   });
   const githubConnection = useQuery({
     queryKey: ["github-connection", session.data?.user.id],
-    queryFn: () => api.readGitHubConnection(),
+    queryFn: () => api.readGithubConnection(),
     enabled: !!session.data,
     retry: false,
   });
   const pollerStatus = useQuery({
     queryKey: ["system-poller"],
-    queryFn: () => api.readPollerStatus(),
+    queryFn: () => api.getPollerStatus(),
     enabled: !!session.data,
     retry: false,
     refetchInterval: 15000,
   });
   const runtimeStatus = useQuery({
     queryKey: ["agent-runtime", pickupAgentId],
-    queryFn: () => api.readAgentRuntime(pickupAgentId),
+    queryFn: () =>
+      api.getAgentRuntime({
+        params: {
+          path: {
+            agent_id: pickupAgentId,
+          },
+        },
+      }),
     enabled: !!pickupAgentId,
     retry: false,
     refetchInterval: 15000,
   });
   const provisionRuntime = useMutation({
-    mutationFn: () => api.provisionAgentRuntime(pickupAgentId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
+    mutationFn: () =>
+      api.provisionAgentRuntime({
+        params: {
+          path: {
+            agent_id: pickupAgentId,
+          },
+        },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
     },
   });
   const githubRepositories = useQuery({
     queryKey: ["github-repositories", session.data?.user.id],
-    queryFn: () => api.listGitHubRepositories(),
+    queryFn: () => api.getGithubRepositories(),
     enabled: !!githubConnection.data?.connection,
     retry: false,
   });
@@ -110,15 +185,29 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
     enabled: !!session.data,
   });
   const verifyRuntime = useMutation({
-    mutationFn: () => api.verifyAgentRuntime(pickupAgentId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
+    mutationFn: () =>
+      api.verifyAgentRuntime({
+        params: {
+          path: {
+            agent_id: pickupAgentId,
+          },
+        },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
     },
   });
   const restartRuntime = useMutation({
-    mutationFn: () => api.restartAgentRuntime(pickupAgentId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
+    mutationFn: () =>
+      api.restartAgentRuntime({
+        params: {
+          path: {
+            agent_id: pickupAgentId,
+          },
+        },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agent-runtime", pickupAgentId] });
     },
   });
 
@@ -203,9 +292,17 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
     () => workspace.data?.items.find((item) => item.id === selectedItemId) ?? null,
     [selectedItemId, workspace.data?.items],
   );
+  const normalizedAgents = useMemo<Agent[]>(
+    () =>
+      (agents.data?.items ?? []).map((entry) => ({
+        ...entry,
+        team_ids: entry.team_ids ?? [],
+      })),
+    [agents.data?.items],
+  );
   const teamAgents = useMemo<Agent[]>(
-    () => (agents.data?.items ?? []).filter((agent) => agent.team_id === teamId),
-    [agents.data?.items, teamId],
+    () => normalizedAgents.filter((agent) => agent.team_ids.includes(teamId)),
+    [normalizedAgents, teamId],
   );
   const selectedTask = useMemo(
     () => teamTasks.data?.items.find((task) => task.id === selectedTaskId) ?? null,
@@ -262,102 +359,142 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
     }
     setPickupAgentId(teamAgents[0].id);
   }, [pickupAgentId, teamAgents]);
+
+  useEffect(() => {
+    if (!teamAgents.length || jobOwnerAgentId) {
+      return;
+    }
+    setJobOwnerAgentId(teamAgents[0].id);
+  }, [jobOwnerAgentId, teamAgents]);
   const runHuddle = useMutation({
     mutationFn: () =>
-      api.createTeamHuddle(teamId, {
-        input: draft.trim(),
-        secret_ids: selectedSecretIds,
+      api.createTeamHuddle({
+        params: {
+          path: {
+            team_id: teamId,
+          },
+        },
+        body: {
+          input: draft.trim(),
+          secret_ids: selectedSecretIds,
+        },
       }),
-    onSuccess: async (payload) => {
+    onSuccess: (payload) => {
       setDraft("");
       setLatestGeneratedItemIds([]);
       setSelectedItemId(payload.workspace_item_id ?? undefined);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-conversations", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-      ]);
+      refreshTeamWorkspaceState();
     },
   });
 
   const runTeam = useMutation({
     mutationFn: () =>
-      api.createTeamResponse(teamId, {
-        input: draft.trim(),
-        conversation_id: teamConversations.data?.items[0]?.id,
-        secret_ids: selectedSecretIds,
+      api.createTeamResponse({
+        params: {
+          path: {
+            team_id: teamId,
+          },
+        },
+        body: {
+          input: draft.trim(),
+          conversation_id: teamConversations.data?.items[0]?.id,
+          secret_ids: selectedSecretIds,
+        },
       }),
-    onSuccess: async (payload) => {
+    onSuccess: (payload) => {
       setDraft("");
-      const generatedIds = payload.generated_items.map((item) => item.id);
+      const generatedIds = (payload.generated_items ?? []).map((item) => item.id);
       setLatestGeneratedItemIds(generatedIds);
       setSelectedItemId(generatedIds[0] ?? payload.workspace_item_id ?? undefined);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-conversations", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-      ]);
+      refreshTeamWorkspaceState();
     },
   });
 
   const exportMutation = useMutation({
     mutationFn: () =>
-      api.exportWorkspaceItemToGitHub(teamId, selectedItemId!, {
-        repository_full_name: selectedRepository,
-        path: exportPath.trim(),
-        commit_message: commitMessage.trim(),
+      api.exportWorkspaceItem({
+        params: {
+          path: {
+            team_id: teamId,
+            item_id: selectedItemId!,
+          },
+        },
+        body: {
+          repository_full_name: selectedRepository,
+          path: exportPath.trim(),
+          commit_message: commitMessage.trim(),
+        },
       }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["team-artifacts", teamId] });
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["team-artifacts", teamId] });
     },
   });
 
   const delegateTask = useMutation({
     mutationFn: () =>
-      api.delegateTask(selectedTaskId!, {
-        assigned_agent_id: delegateTargetAgentId,
-        note: delegateNote.trim() || undefined,
+      api.postTaskDelegate({
+        params: {
+          path: {
+            task_id: selectedTaskId!,
+          },
+        },
+        body: {
+          assigned_agent_id: delegateTargetAgentId,
+          note: delegateNote.trim() || undefined,
+        },
       }),
-    onSuccess: async () => {
+    onSuccess: () => {
       setDelegateNote("");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-      ]);
+      refreshTaskState();
     },
   });
 
   const postTaskMessage = useMutation({
     mutationFn: () =>
-      api.createTaskMessage(selectedTaskId!, {
-        agent_id: messageAgentId || undefined,
-        content: messageNote.trim(),
+      api.postTaskMessage({
+        params: {
+          path: {
+            task_id: selectedTaskId!,
+          },
+        },
+        body: {
+          agent_id: messageAgentId || undefined,
+          content: messageNote.trim(),
+        },
       }),
-    onSuccess: async () => {
+    onSuccess: () => {
       setMessageNote("");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-      ]);
+      refreshTaskState();
     },
   });
 
   const pickupNextTask = useMutation({
-    mutationFn: () => api.claimNextInboxTask(pickupAgentId),
-    onSuccess: async (payload) => {
+    mutationFn: () =>
+      api.postClaimNextInboxTask({
+        params: {
+          path: {
+            agent_id: pickupAgentId,
+          },
+        },
+      }),
+    onSuccess: (payload) => {
       if (payload.task) {
         setSelectedTaskId(payload.task.id);
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-      ]);
+      refreshTaskState();
     },
   });
 
   const runNextInboxTask = useMutation({
-    mutationFn: () => api.runNextInboxTask(pickupAgentId),
-    onSuccess: async (payload) => {
+    mutationFn: () =>
+      api.postRunNextInboxTask({
+        params: {
+          path: {
+            agent_id: pickupAgentId,
+          },
+        },
+      }),
+    onSuccess: (payload) => {
       if (payload.task) {
         setSelectedTaskId(payload.task.id);
       }
@@ -365,17 +502,21 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         setLatestGeneratedItemIds([payload.workspace_item_id]);
         setSelectedItemId(payload.workspace_item_id);
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
-      ]);
+      refreshTaskState();
+      void queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] });
     },
   });
 
   const runInboxCycle = useMutation({
-    mutationFn: () => api.runTeamInboxCycle(teamId),
-    onSuccess: async (payload) => {
+    mutationFn: () =>
+      api.postRunTeamInboxCycle({
+        params: {
+          path: {
+            team_id: teamId,
+          },
+        },
+      }),
+    onSuccess: (payload) => {
       const firstTaskId = payload.results.find((item) => item.task?.id)?.task?.id;
       const workspaceItemIds = payload.results
         .map((item) => item.workspace_item_id)
@@ -388,53 +529,72 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         setLatestGeneratedItemIds(workspaceItemIds);
         setSelectedItemId(firstWorkspaceItemId);
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
-      ]);
+      refreshTaskState();
+      void queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] });
     },
   });
 
   const completeSelectedTask = useMutation({
     mutationFn: () =>
-      api.completeTask(selectedTaskId!, {
-        agent_id: selectedTask?.assigned_agent_id,
-        claim_token: selectedTask?.claim_token ?? undefined,
-        content: completionNote.trim(),
+      api.postTaskComplete({
+        params: {
+          path: {
+            task_id: selectedTaskId!,
+          },
+        },
+        body: {
+          agent_id: selectedTask?.assigned_agent_id,
+          claim_token: selectedTask?.claim_token ?? undefined,
+          content: completionNote.trim(),
+        },
       }),
-    onSuccess: async () => {
+    onSuccess: () => {
       setCompletionNote("");
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["task-updates"] }),
-      ]);
+      refreshTaskState();
     },
   });
   const createAutomationJob = useMutation({
     mutationFn: () =>
-      api.createAutomationJob({
-        team_id: teamId,
-        name: jobName.trim(),
-        schedule: jobSchedule.trim(),
-        prompt: jobPrompt.trim(),
+      api.postJob({
+        body: {
+          agent_id: jobOwnerAgentId,
+          agent_team_id: teamId,
+          name: jobName.trim(),
+          schedule: jobSchedule.trim(),
+          prompt: jobPrompt.trim(),
+          enabled: true,
+        },
       }),
-    onSuccess: async () => {
+    onSuccess: () => {
       setJobName("");
       setJobPrompt("");
-      await queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
+      void queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
     },
   });
   const updateAutomationJob = useMutation({
     mutationFn: ({ jobId, enabled }: { jobId: string; enabled: boolean }) =>
-      api.updateAutomationJob(jobId, { enabled }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
+      api.patchJob({
+        params: {
+          path: {
+            job_id: jobId,
+          },
+        },
+        body: { enabled },
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
     },
   });
   const runAutomationJob = useMutation({
-    mutationFn: (jobId: string) => api.runAutomationJob(jobId),
-    onSuccess: async (payload) => {
+    mutationFn: (jobId: string) =>
+      api.postRunJob({
+        params: {
+          path: {
+            job_id: jobId,
+          },
+        },
+      }),
+    onSuccess: (payload) => {
       if (payload.workspace_item_id) {
         setLatestGeneratedItemIds((current) =>
           current.includes(payload.workspace_item_id!)
@@ -443,12 +603,8 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
         );
         setSelectedItemId(payload.workspace_item_id);
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-workspace", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-conversations", teamId] }),
-        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] }),
-      ]);
+      void queryClient.invalidateQueries({ queryKey: ["automation-jobs", teamId] });
+      refreshTeamWorkspaceState();
     },
   });
 
@@ -517,7 +673,7 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
 
   function handleCreateAutomationJob(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!jobName.trim() || !jobSchedule.trim() || !jobPrompt.trim()) {
+    if (!jobName.trim() || !jobSchedule.trim() || !jobPrompt.trim() || !jobOwnerAgentId) {
       return;
     }
     void createAutomationJob.mutateAsync();
@@ -653,7 +809,7 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
                   <p className="text-xs uppercase tracking-[0.18em] text-muted">Last Sweep</p>
                   <p className="mt-2 text-sm text-text">
                     {pollerStatus.data.lease.last_sweep_completed_at
-                      ? new Date(pollerStatus.data.lease.last_sweep_completed_at).toLocaleString()
+                      ? parseApiDate(pollerStatus.data.lease.last_sweep_completed_at).toLocaleString()
                       : "No completed sweep yet"}
                   </p>
                 </div>
@@ -684,6 +840,20 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
               </span>
             </div>
             <form className="mt-5 space-y-4" onSubmit={handleCreateAutomationJob}>
+              <label className="block space-y-2">
+                <span className="text-xs uppercase tracking-[0.18em] text-muted">Owning Agent</span>
+                <select
+                  className="w-full rounded border border-border bg-surface px-3 py-3 text-sm text-text outline-none"
+                  value={jobOwnerAgentId}
+                  onChange={(event) => setJobOwnerAgentId(event.target.value)}
+                >
+                  {teamAgents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name} · {agent.role_name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <input
                 className="w-full rounded border border-border bg-surface px-3 py-3 text-sm text-text outline-none"
                 placeholder="Weekly Team Review"
@@ -718,9 +888,12 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
                       <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted">
                         {job.schedule} · {job.enabled ? "enabled" : "disabled"}
                       </p>
+                      <p className="mt-2 text-xs text-muted">
+                        Owner: {teamAgents.find((agent) => agent.id === job.agent_id)?.name ?? "Unknown agent"}
+                      </p>
                       <p className="mt-3 text-sm leading-7 text-text">{job.prompt}</p>
                       <p className="mt-2 text-xs text-muted">
-                        Last run {job.last_run_at ? new Date(job.last_run_at).toLocaleString() : "not yet run"}
+                        Last run {job.last_run_at ? parseApiDate(job.last_run_at).toLocaleString() : "not yet run"}
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -937,12 +1110,12 @@ function TeamWorkspaceInner({ teamId }: { teamId: string }) {
                       </p>
                       {task.claim_expires_at ? (
                         <p className="mt-2 text-xs text-muted">
-                          Lease active until {new Date(task.claim_expires_at).toLocaleTimeString()}.
+                          Lease active until {parseApiDate(task.claim_expires_at).toLocaleTimeString()}.
                         </p>
                       ) : null}
                       {task.completed_at ? (
                         <p className="mt-2 text-xs text-muted">
-                          Completed at {new Date(task.completed_at).toLocaleTimeString()}.
+                          Completed at {parseApiDate(task.completed_at).toLocaleTimeString()}.
                         </p>
                       ) : null}
                     </div>

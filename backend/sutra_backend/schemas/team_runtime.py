@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from sutra_backend.enums import TeamTaskSource, TeamTaskStatus, TeamTaskUpdateType
 from sutra_backend.schemas.catalog import SharedWorkspaceItemRead
 
 
@@ -33,8 +34,8 @@ class TeamTaskRead(BaseModel):
     assigned_agent_id: UUID
     title: str
     instruction: str
-    status: str
-    source: str
+    status: TeamTaskStatus
+    source: TeamTaskSource
     claim_token: str | None = None
     claimed_at: datetime | None = None
     claim_expires_at: datetime | None = None
@@ -50,7 +51,7 @@ class TeamTaskUpdateRead(BaseModel):
     task_id: UUID
     team_id: UUID
     agent_id: UUID | None = None
-    event_type: str
+    event_type: TeamTaskUpdateType
     content: str
     created_at: datetime
     updated_at: datetime

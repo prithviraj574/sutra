@@ -5,17 +5,13 @@ from uuid import UUID
 
 from sqlmodel import Session, select
 
-from sutra_backend.models import Agent, Conversation, Message, SharedWorkspaceItem, Team, TeamTask, TeamTaskUpdate, User
+from sutra_backend.models import AgentTeam, Conversation, Message, SharedWorkspaceItem, TeamTask, TeamTaskUpdate, User
+from sutra_backend.services.agent_teams import get_owned_agent as find_owned_agent, get_owned_team as find_owned_team
 from sutra_backend.services.runtime import AgentNotFoundError
 
 
 def list_agent_conversations(session: Session, *, user: User, agent_id: UUID) -> list[Conversation]:
-    owned_agent = session.exec(
-        select(Agent)
-        .join(Team, Team.id == Agent.team_id)
-        .where(Agent.id == agent_id)
-        .where(Team.user_id == user.id)
-    ).first()
+    owned_agent = find_owned_agent(session, agent_id=agent_id, user=user)
     if owned_agent is None:
         raise AgentNotFoundError("Agent not found.")
 
@@ -37,17 +33,13 @@ def list_conversation_messages(session: Session, *, user: User, conversation_id:
 
 
 def list_team_conversations(session: Session, *, user: User, team_id: UUID) -> list[Conversation]:
-    owned_team = session.exec(
-        select(Team)
-        .where(Team.id == team_id)
-        .where(Team.user_id == user.id)
-    ).first()
+    owned_team = find_owned_team(session, team_id=team_id, user=user)
     if owned_team is None:
         raise AgentNotFoundError("Team not found.")
 
     return session.exec(
         select(Conversation)
-        .where(Conversation.team_id == team_id)
+        .where(Conversation.agent_team_id == team_id)
         .where(Conversation.mode == "team")
         .order_by(Conversation.updated_at.desc())
     ).all()
@@ -67,15 +59,20 @@ def get_owned_conversation(
     user: User,
     conversation_id: UUID,
 ) -> Conversation:
-    owned_conversation = session.exec(
-        select(Conversation)
-        .join(Team, Team.id == Conversation.team_id)
-        .where(Conversation.id == conversation_id)
-        .where(Team.user_id == user.id)
-    ).first()
-    if owned_conversation is None:
+    conversation = session.get(Conversation, conversation_id)
+    if conversation is None:
         raise AgentNotFoundError("Conversation not found.")
-    return owned_conversation
+    if conversation.agent_team_id is not None:
+        owned_team = find_owned_team(session, team_id=conversation.agent_team_id, user=user)
+        if owned_team is None:
+            raise AgentNotFoundError("Conversation not found.")
+    elif conversation.agent_id is not None:
+        owned_agent = find_owned_agent(session, agent_id=conversation.agent_id, user=user)
+        if owned_agent is None:
+            raise AgentNotFoundError("Conversation not found.")
+    else:
+        raise AgentNotFoundError("Conversation not found.")
+    return conversation
 
 
 def read_conversation_stream_snapshot(

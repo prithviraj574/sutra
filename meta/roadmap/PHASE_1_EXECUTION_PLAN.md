@@ -2,7 +2,7 @@
 
 Status: Approved and in execution  
 Execution State: Firecracker-host runtime proof and isolation hardening in progress  
-Last Updated: 2026-03-31  
+Last Updated: 2026-04-03  
 Primary Reference: [`meta/PRD/phase_1_managed_hermes_wrapper.md`](/Users/prithviraj/Desktop/Misc/sutra/meta/PRD/phase_1_managed_hermes_wrapper.md)
 
 ## Current Progress
@@ -67,7 +67,7 @@ Completed in the first execution pass:
 - team response APIs now return the generated workspace files explicitly, and follow-up team runs prioritize recent task outputs from the same team context so durable workspace artifacts feed the next run more intentionally
 - the single-agent chat surface now prioritizes the current conversation’s generated workspace files and keeps export defaults aligned with the selected output, which makes the ownership path clearer from chat instead of only from the team workspace
 - backend local-dev configuration loading is now resilient to whether `sutra_backend` is started from the repo root or `backend/`, which removes a Firebase auth footgun during local end-to-end testing
-- the local runtime helper scripts now use `backend/.env` as the single backend env source, no longer depend on an untracked `.context` path, and accept either `DATABASE_URL` or `POSTGRES_URL` during local startup
+- the local runtime helper scripts now use `backend/.env` as the single backend env source, no longer depend on an untracked `.context` path, and standardize on `POSTGRES_URL` during local startup
 - Hermes session continuity is now more explicit in the control plane: single-agent, team, huddle, and inbox runs send stable conversation keys to Hermes `/v1/responses` instead of relying only on ad hoc request chaining, so backend-driven conversations are less stateless than before
 - the GCP runtime path now defines an explicit persistent agent-state contract: each agent gets a deterministic state disk, mount paths for `HERMES_HOME` and private volume, and startup-script metadata that mounts persistent storage without writing secrets into runtime-readable env files
 - the GCP runtime startup contract now goes one step further: provisioning metadata includes a concrete host bootstrap flow that mounts the persistent state disk, sets `HERMES_HOME` on the mounted filesystem, enables the Hermes API server, and launches `gateway.run` as a managed system service instead of leaving VM boot behavior implicit
@@ -84,6 +84,12 @@ Completed in the first execution pass:
 - the mixed-mode developer path now works live: local `sutra_backend` and local `frontend` can run against the remote GCP runtime host using the repo launch scripts and local Firebase config
 - first-sign-in runtime provisioning now succeeds through the real remote host path, and runtime verification confirms request-readiness plus private-filesystem isolation from the local control plane
 - the remaining live runtime blocker is upstream Hermes/provider auth inside the hosted agent process: agent runs currently complete through the control-plane path but can return provider-auth errors until managed LLM/browser credentials are injected
+- agent/team ownership is now cleaner in the data model: agents are durable user-owned entities, team membership lives in `AgentTeamAssignment`, and automation jobs are owned by one agent with optional team context instead of a nullable team-or-agent split
+- conversation context is now explicit at the control-plane layer: conversations carry `agent_team_id` when they are team-scoped, direct agent chat uses `mode=agent`, and the backend now has a first team-member response path instead of inferring team context from the agent row
+- agents no longer carry a baked-in `home_team_id`: personal-workspace behavior now comes from actual personal-team membership, team execution uses explicit team context from requests/tasks, and managed runtimes no longer attach one permanent shared workspace by default
+- the backend domain model now uses explicit enums for core state/mode fields instead of free-form strings, which should make the Phase 1 contract less drift-prone across models and API schemas
+- Alembic history has been reset to a single clean baseline migration generated from current `SQLModel.metadata`, and the repo should prefer `alembic revision --autogenerate` over hand-written migration files going forward
+- the frontend API surface is now consolidated into one generated module at `frontend/src/lib/api.generated.ts`; the old parallel `api.ts` shim is gone, the frontend regenerates from the running backend's built-in `/openapi.json` endpoint, JSON requests now go through `openapi-fetch` with auth middleware and generated per-endpoint client methods (so feature code no longer calls `requestData(...)` directly), and SSE remains the only custom transport helper
 
 Next on the critical path:
 
@@ -102,6 +108,7 @@ Next on the critical path:
 - complete runtime bootstrap and stronger runtime health reconciliation so newly provisioned managed agents become request-ready automatically without relying only on lease metadata
 - push the runtime reconciliation path beyond HTTP reachability into real managed-runtime readiness once the GCP/Firecracker host layer exists
 - turn the new persistent state-disk and mount contract into a fully live hosted runtime path by actually bootstrapping Hermes on that mounted filesystem and proving memory survives restart
+- wire optional Honcho memory through the managed runtime path with a per-user workspace (`sutra:prod:user:{user_id}`), a shared user peer, and a distinct agent peer per runtime so personalization spans a user’s agents without weakening private per-agent Hermes state
 - exercise the new host bootstrap on a real low-capacity GCP runtime instance, then verify that a restarted agent still preserves Hermes-side response chain state and filesystem contents
 - keep the first real runtime host judicious: one tiny dev instance, explicit cleanup path, and only enough uptime to prove mounted-state and Hermes-session persistence
 - deepen agent-to-agent coordination from task context into cleaner inter-agent messaging semantics, but keep huddles plus owned tasks as the primary control structure

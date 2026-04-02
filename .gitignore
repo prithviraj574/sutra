@@ -12,3 +12,5 @@ __pycache__/
 backend/.venv/
 backend/.coverage
 frontend/node_modules
+.local
+.conductor

@@ -21,9 +21,12 @@ export function SecretsPage() {
   const createSecret = useMutation({
     mutationFn: () =>
       api.createSecret({
-        name: name.trim(),
-        value: value.trim(),
-        provider: provider.trim() || undefined,
+        body: {
+          name: name.trim(),
+          value: value.trim(),
+          provider: provider.trim() || undefined,
+          scope: "user",
+        },
       }),
     onSuccess: async () => {
       setName("");
@@ -34,7 +37,14 @@ export function SecretsPage() {
   });
 
   const deleteSecret = useMutation({
-    mutationFn: (secretId: string) => api.deleteSecret(secretId),
+    mutationFn: (secretId: string) =>
+      api.removeSecret({
+        params: {
+          path: {
+            secret_id: secretId,
+          },
+        },
+      }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["secrets", session.data?.user.id] });
     },

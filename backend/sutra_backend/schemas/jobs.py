@@ -12,8 +12,8 @@ class AutomationJobRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    team_id: UUID | None = None
-    agent_id: UUID | None = None
+    agent_id: UUID
+    agent_team_id: UUID | None = None
     name: str
     schedule: str
     prompt: str
@@ -29,11 +29,11 @@ class AutomationJobListResponse(BaseModel):
 
 
 class AutomationJobCreateRequest(BaseModel):
+    agent_id: UUID
+    agent_team_id: UUID | None = None
     name: str
     schedule: str
     prompt: str
-    team_id: UUID | None = None
-    agent_id: UUID | None = None
     enabled: bool = True
 
 

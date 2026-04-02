@@ -145,7 +145,7 @@ async def stream_conversation_events(
                             event_id=f"{conversation_id}:assistant:{sequence}",
                             type="assistant.message_delta",
                             conversation_id=snapshot.conversation.id,
-                            agent_id=snapshot.conversation.agent_id,
+                            agent_id=message.actor_id,
                             timestamp=message.created_at,
                             sequence=sequence,
                             payload={
@@ -161,7 +161,7 @@ async def stream_conversation_events(
                             event_id=f"{conversation_id}:run-completed:{sequence}",
                             type="run.completed",
                             conversation_id=snapshot.conversation.id,
-                            agent_id=snapshot.conversation.agent_id,
+                            agent_id=message.actor_id,
                             timestamp=message.updated_at,
                             sequence=sequence,
                             payload={

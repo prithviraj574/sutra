@@ -4,12 +4,13 @@ from dataclasses import dataclass
 from tempfile import NamedTemporaryFile
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session, SQLModel
+from sqlmodel import Session, SQLModel, select
 
 from sutra_backend.auth import dependencies as auth_dependencies
 from sutra_backend.config import Settings
 from sutra_backend.db import create_database_engine, get_session
 from sutra_backend.main import create_app
+from sutra_backend.models import RuntimeLease
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,53 @@ def test_team_creation_route_creates_distinct_role_agents_and_workspace(monkeypa
         "research",
         "README.md",
     ]
+
+
+def test_team_creation_bootstraps_team_agent_runtimes_when_configured(monkeypatch) -> None:
+    client = build_client(
+        Settings(
+            app_env="test",
+            database_url="sqlite://",
+            runtime_provider="static_dev",
+            dev_runtime_base_url="http://runtime.internal",
+            dev_runtime_api_key="runtime-key",
+        )
+    )
+
+    monkeypatch.setattr(
+        auth_dependencies,
+        "verify_firebase_token",
+        lambda _: FakeIdentity(
+            uid="firebase-user-1",
+            email="user@example.com",
+            name="Sutra User",
+        ),
+    )
+
+    create_response = client.post(
+        "/api/teams",
+        headers={"Authorization": "Bearer valid-token"},
+        json={
+            "name": "Launch Crew",
+            "description": "Cross-functional product team.",
+            "agents": [
+                {"role_template_key": "planner"},
+                {"role_template_key": "researcher"},
+                {"role_template_key": "builder"},
+            ],
+        },
+    )
+
+    assert create_response.status_code == 201
+    payload = create_response.json()
+    agent_ids = {agent["id"] for agent in payload["agents"]}
+    session = client.app.dependency_overrides[get_session]()
+    leases = session.exec(select(RuntimeLease)).all()
+
+    leased_agent_ids = {str(lease.agent_id) for lease in leases}
+
+    assert agent_ids.issubset(leased_agent_ids)
+    assert all(lease.api_base_url == "http://runtime.internal" for lease in leases)
 
 
 def test_team_creation_rejects_duplicate_role_templates(monkeypatch) -> None:

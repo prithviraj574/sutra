@@ -12,7 +12,7 @@ from sutra_backend.auth import dependencies as auth_dependencies
 from sutra_backend.config import Settings
 from sutra_backend.db import create_database_engine, get_session
 from sutra_backend.main import create_app
-from sutra_backend.models import Agent, SharedWorkspaceItem, Team, TeamTask, utcnow
+from sutra_backend.models import Agent, AgentTeam, SharedWorkspaceItem, TeamTask, utcnow
 from sutra_backend.runtime.client import HermesResponse
 from sutra_backend.services import team_runtime as team_runtime_service
 
@@ -25,7 +25,11 @@ class FakeIdentity:
     picture: str | None = None
 
 
-def build_client(settings: Settings) -> tuple[TestClient, Session]:
+def build_client(
+    settings: Settings,
+    *,
+    raise_server_exceptions: bool = True,
+) -> tuple[TestClient, Session]:
     database_file = NamedTemporaryFile(suffix=".db")
     engine = create_database_engine(f"sqlite:///{database_file.name}")
     SQLModel.metadata.create_all(engine)
@@ -38,7 +42,7 @@ def build_client(settings: Settings) -> tuple[TestClient, Session]:
 
     app.dependency_overrides[get_session] = override_get_session
     app.state._database_file = database_file
-    return TestClient(app), session
+    return TestClient(app, raise_server_exceptions=raise_server_exceptions), session
 
 
 def authenticate(client: TestClient, monkeypatch) -> None:
@@ -75,7 +79,7 @@ def test_team_response_runs_each_agent_and_writes_workspace_summary(monkeypatch)
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     response_ids = iter(["resp_planner", "resp_researcher"])
 
@@ -253,7 +257,7 @@ def test_team_response_uses_open_huddle_tasks_and_marks_them_completed(monkeypat
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 
@@ -322,6 +326,119 @@ def test_team_response_uses_open_huddle_tasks_and_marks_them_completed(monkeypat
     assert all(task.status == "completed" for task in tasks)
 
 
+def test_team_response_releases_claimed_tasks_after_runtime_failure(monkeypatch) -> None:
+    settings = Settings(
+        app_env="test",
+        database_url="sqlite://",
+        runtime_provider="static_dev",
+        dev_runtime_base_url="http://runtime.internal",
+        dev_runtime_api_key="runtime-key",
+    )
+    client, session = build_client(settings, raise_server_exceptions=False)
+    authenticate(client, monkeypatch)
+
+    create_team_response = client.post(
+        "/api/teams",
+        headers={"Authorization": "Bearer valid-token"},
+        json={
+            "name": "Launch Crew",
+            "agents": [
+                {"role_template_key": "planner"},
+                {"role_template_key": "researcher"},
+            ],
+        },
+    )
+    assert create_team_response.status_code == 201
+    team_id = create_team_response.json()["team"]["id"]
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
+
+    huddle_ids = iter(["huddle_planner", "huddle_researcher"])
+
+    async def fake_huddle_response(self, request, *, request_env=None):
+        response_id = next(huddle_ids)
+        if response_id == "huddle_planner":
+            return HermesResponse(
+                response_id=response_id,
+                output_text="Define the launch milestones and final brief outline.",
+                raw_response={"id": response_id, "output": []},
+            )
+        return HermesResponse(
+            response_id=response_id,
+            output_text="Research competitors and collect user pain points for the brief.",
+            raw_response={"id": response_id, "output": []},
+        )
+
+    monkeypatch.setattr(
+        team_runtime_service.HermesRuntimeClient,
+        "create_response",
+        fake_huddle_response,
+    )
+
+    huddle_response = client.post(
+        f"/api/teams/{team.id}/huddles",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"input": "Prepare a product launch brief."},
+    )
+    assert huddle_response.status_code == 200
+
+    execution_ids = iter(["run_planner", "run_researcher"])
+
+    async def failing_execution_response(self, request, *, request_env=None):
+        response_id = next(execution_ids)
+        if response_id == "run_planner":
+            return HermesResponse(
+                response_id=response_id,
+                output_text="Planned the launch brief structure and milestones.",
+                raw_response={"id": response_id, "output": []},
+            )
+        raise RuntimeError("runtime failed")
+
+    monkeypatch.setattr(
+        team_runtime_service.HermesRuntimeClient,
+        "create_response",
+        failing_execution_response,
+    )
+
+    response = client.post(
+        f"/api/teams/{team.id}/responses",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"input": "Execute the agreed launch brief plan."},
+    )
+    assert response.status_code == 500
+
+    tasks = session.exec(
+        select(TeamTask)
+        .where(TeamTask.team_id == team.id)
+        .order_by(TeamTask.created_at.asc())
+    ).all()
+    assert len(tasks) == 2
+    assert [task.status for task in tasks] == ["completed", "open"]
+    assert all(task.claim_token is None for task in tasks)
+
+    retry_ids = iter(["retry_planner", "retry_researcher"])
+
+    async def retry_execution_response(self, request, *, request_env=None):
+        response_id = next(retry_ids)
+        return HermesResponse(
+            response_id=response_id,
+            output_text=f"Recovered with {response_id}.",
+            raw_response={"id": response_id, "output": []},
+        )
+
+    monkeypatch.setattr(
+        team_runtime_service.HermesRuntimeClient,
+        "create_response",
+        retry_execution_response,
+    )
+
+    retry_response = client.post(
+        f"/api/teams/{team.id}/responses",
+        headers={"Authorization": "Bearer valid-token"},
+        json={"input": "Execute the agreed launch brief plan."},
+    )
+    assert retry_response.status_code == 200
+
+
 def test_team_response_writes_per_agent_outputs_into_workspace(monkeypatch) -> None:
     settings = Settings(
         app_env="test",
@@ -346,7 +463,7 @@ def test_team_response_writes_per_agent_outputs_into_workspace(monkeypatch) -> N
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 
@@ -445,7 +562,7 @@ def test_team_response_prioritizes_previous_conversation_outputs_in_workspace_co
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 
@@ -634,7 +751,7 @@ def test_team_response_claims_tasks_before_agent_execution(monkeypatch) -> None:
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 
@@ -824,7 +941,7 @@ def test_team_response_includes_huddle_plan_and_shared_workspace_context(monkeyp
     )
     assert create_team_response.status_code == 201
     team_id = create_team_response.json()["team"]["id"]
-    team = session.exec(select(Team).where(Team.id == UUID(team_id))).one()
+    team = session.exec(select(AgentTeam).where(AgentTeam.id == UUID(team_id))).one()
 
     huddle_ids = iter(["huddle_planner", "huddle_researcher"])
 

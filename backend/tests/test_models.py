@@ -5,6 +5,8 @@ from sqlmodel import Session, SQLModel, select
 from sutra_backend.db import create_database_engine
 from sutra_backend.models import (
     Agent,
+    AgentTeam,
+    AgentTeamAssignment,
     Artifact,
     AutomationJob,
     Conversation,
@@ -13,7 +15,6 @@ from sutra_backend.models import (
     RoleTemplate,
     RuntimeLease,
     Secret,
-    Team,
     TeamTask,
     TeamTaskUpdate,
     ToolEvent,
@@ -32,7 +33,7 @@ def test_core_phase_one_models_persist_to_postgres(postgres_database_url: str) -
         session.commit()
         session.refresh(user)
 
-        team = Team(user_id=user.id, name="Default Team", mode="team")
+        team = AgentTeam(user_id=user.id, name="Default Team", mode="team")
         role_template = RoleTemplate(
             key="planner",
             name="Planner",
@@ -45,7 +46,7 @@ def test_core_phase_one_models_persist_to_postgres(postgres_database_url: str) -
         session.refresh(role_template)
 
         agent = Agent(
-            team_id=team.id,
+            user_id=user.id,
             role_template_id=role_template.id,
             name="Lead Agent",
             role_name="Planner",
@@ -56,8 +57,16 @@ def test_core_phase_one_models_persist_to_postgres(postgres_database_url: str) -
         session.add(agent)
         session.commit()
         session.refresh(agent)
+        session.add(
+            AgentTeamAssignment(
+                agent_id=agent.id,
+                agent_team_id=team.id,
+                shared_workspace_enabled=True,
+            )
+        )
+        session.commit()
 
-        conversation = Conversation(team_id=team.id, agent_id=agent.id, mode="single_agent")
+        conversation = Conversation(agent_team_id=team.id, agent_id=agent.id, mode="team_member")
         session.add(conversation)
         session.commit()
         session.refresh(conversation)
@@ -110,8 +119,8 @@ def test_core_phase_one_models_persist_to_postgres(postgres_database_url: str) -
         )
         session.add(
             AutomationJob(
-                team_id=team.id,
                 agent_id=agent.id,
+                agent_team_id=team.id,
                 name="daily-sync",
                 schedule="0 9 * * *",
                 prompt="Summarize repo changes.",
@@ -155,8 +164,14 @@ def test_core_phase_one_models_persist_to_postgres(postgres_database_url: str) -
         persisted_task = session.exec(select(TeamTask)).one()
         persisted_task_update = session.exec(select(TeamTaskUpdate)).one()
 
-        assert persisted_agent.team_id == team.id
+        assert persisted_agent.user_id == user.id
+        assert session.exec(
+            select(AgentTeamAssignment)
+            .where(AgentTeamAssignment.agent_id == persisted_agent.id)
+            .where(AgentTeamAssignment.agent_team_id == team.id)
+        ).one()
         assert persisted_job.agent_id == agent.id
+        assert persisted_job.agent_team_id == team.id
         assert persisted_task.assigned_agent_id == agent.id
         assert persisted_task_update.task_id == task.id
 

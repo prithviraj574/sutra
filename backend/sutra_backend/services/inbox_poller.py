@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from sutra_backend.config import Settings
-from sutra_backend.models import PollerLease, Team, User, utcnow
+from sutra_backend.models import AgentTeam, PollerLease, User, utcnow
 from sutra_backend.services.team_runtime import run_team_inbox_cycle
 
 POLL_LEASE_NAME = "inbox_poller"
@@ -168,7 +168,7 @@ async def run_inbox_poller_sweep(
 
     executed_count = 0
     max_tasks = max(1, settings.inbox_poller_max_tasks_per_sweep)
-    teams = session.exec(select(Team).order_by(Team.created_at.asc())).all()
+    teams = session.exec(select(AgentTeam).order_by(AgentTeam.created_at.asc())).all()
     for team in teams:
         if executed_count >= max_tasks:
             break

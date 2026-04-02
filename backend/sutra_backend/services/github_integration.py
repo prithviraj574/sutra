@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from sqlmodel import Session, select
 
 from sutra_backend.config import Settings
-from sutra_backend.models import Artifact, GitHubConnection, SharedWorkspaceItem, Team, User
+from sutra_backend.models import AgentTeam, Artifact, GitHubConnection, SharedWorkspaceItem, User
 from sutra_backend.services.teams import TeamServiceError
 
 
@@ -147,7 +147,7 @@ def export_workspace_item_to_github(
     commit_message: str,
 ) -> GitHubExportResult:
     team = session.exec(
-        select(Team).where(Team.id == team_id).where(Team.user_id == user.id)
+        select(AgentTeam).where(AgentTeam.id == team_id).where(AgentTeam.user_id == user.id)
     ).first()
     if team is None:
         raise TeamServiceError("Team not found.")
